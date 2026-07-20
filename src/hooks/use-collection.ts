@@ -1,62 +1,74 @@
 "use client";
 
-import { useSyncExternalStore } from "react";
+import { useCallback, useEffect, useState } from "react";
 
-import {
-  countByStatus,
-  readCollection,
-  setCardStatus,
-  writeCollection,
-} from "@/lib/collection-store";
+import { countByStatus, setCardStatus } from "@/lib/collection-store";
 import type { CardBrief, CollectionMap, CollectionStatus } from "@/lib/types";
 
-type Listener = () => void;
-
-let memoryCollection: CollectionMap = {};
-let hydrated = false;
-const listeners = new Set<Listener>();
-
-function emit() {
-  for (const listener of listeners) listener();
-}
-
-function ensureHydrated() {
-  if (hydrated || typeof window === "undefined") return;
-  memoryCollection = readCollection();
-  hydrated = true;
-}
-
-function subscribe(listener: Listener) {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
-}
-
-function getSnapshot(): CollectionMap {
-  ensureHydrated();
-  return memoryCollection;
-}
-
-function getServerSnapshot(): CollectionMap {
-  return {};
-}
-
-function commit(next: CollectionMap) {
-  memoryCollection = next;
-  writeCollection(next);
-  emit();
-}
-
 export function useCollection() {
-  const collection = useSyncExternalStore(
-    subscribe,
-    getSnapshot,
-    getServerSnapshot,
-  );
+  const [collection, setCollection] = useState<CollectionMap>({});
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const response = await fetch("/api/collection");
+      if (!response.ok) {
+        throw new Error("Falha ao carregar a coleção.");
+      }
+
+      const data = (await response.json()) as { collection: CollectionMap };
+      setCollection(data.collection ?? {});
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Não foi possível carregar a coleção.",
+      );
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
 
   const counts = countByStatus(collection);
 
-  function updateStatus(card: CardBrief, status: CollectionStatus | null) {
-    commit(setCardStatus(collection, card, status));
+  async function updateStatus(card: CardBrief, status: CollectionStatus | null) {
+    const previous = collection;
+    setCollection(setCardStatus(collection, card, status));
+    setError(null);
+
+    try {
+      if (status === null) {
+        const response = await fetch(
+          `/api/collection?cardId=${encodeURIComponent(card.id)}`,
+          { method: "DELETE" },
+        );
+        if (!response.ok) {
+          throw new Error("Falha ao remover a carta.");
+        }
+        return;
+      }
+
+      const response = await fetch("/api/collection", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ card, status }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Falha ao salvar a carta.");
+      }
+    } catch (err) {
+      setCollection(previous);
+      setError(
+        err instanceof Error ? err.message : "Não foi possível atualizar a coleção.",
+      );
+    }
   }
 
   function getStatus(cardId: string): CollectionStatus | null {
@@ -71,7 +83,10 @@ export function useCollection() {
     owned,
     wanted,
     counts,
+    isLoading,
+    error,
     getStatus,
     updateStatus,
+    refresh,
   };
 }

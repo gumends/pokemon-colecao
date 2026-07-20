@@ -6,20 +6,33 @@ import { useEffect, useState } from "react";
 import { Input } from "@/components/ui/input";
 
 type SearchBarProps = {
-  onSearch: (query: string) => void;
+  value: string;
+  onValueChange: (value: string) => void;
+  placeholder?: string;
   isLoading?: boolean;
 };
 
-export function SearchBar({ onSearch, isLoading }: SearchBarProps) {
-  const [value, setValue] = useState("Pikachu");
+export function SearchBar({
+  value,
+  onValueChange,
+  placeholder = "Buscar…",
+  isLoading,
+}: SearchBarProps) {
+  const [localValue, setLocalValue] = useState(value);
+
+  useEffect(() => {
+    setLocalValue(value);
+  }, [value]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      onSearch(value.trim());
-    }, 350);
+      if (localValue.trim() !== value.trim()) {
+        onValueChange(localValue.trim());
+      }
+    }, 300);
 
     return () => window.clearTimeout(timer);
-  }, [value, onSearch]);
+  }, [localValue, onValueChange, value]);
 
   return (
     <div className="relative">
@@ -28,11 +41,11 @@ export function SearchBar({ onSearch, isLoading }: SearchBarProps) {
         aria-hidden
       />
       <Input
-        value={value}
-        onChange={(event) => setValue(event.target.value)}
-        placeholder="Buscar carta pelo nome…"
+        value={localValue}
+        onChange={(event) => setLocalValue(event.target.value)}
+        placeholder={placeholder}
         className="h-11 rounded-xl border-border/80 bg-background/80 pl-10 text-base shadow-sm"
-        aria-label="Buscar carta pelo nome"
+        aria-label={placeholder}
       />
       {isLoading ? (
         <span className="absolute top-1/2 right-3 -translate-y-1/2 text-xs text-muted-foreground">

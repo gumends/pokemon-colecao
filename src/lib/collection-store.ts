@@ -1,23 +1,5 @@
 import type { CardBrief, CollectionMap, CollectionStatus } from "@/lib/types";
 
-export const COLLECTION_STORAGE_KEY = "pokemon-colecao:v1";
-
-export function readCollection(): CollectionMap {
-  if (typeof window === "undefined") return {};
-
-  try {
-    const raw = window.localStorage.getItem(COLLECTION_STORAGE_KEY);
-    if (!raw) return {};
-    return JSON.parse(raw) as CollectionMap;
-  } catch {
-    return {};
-  }
-}
-
-export function writeCollection(map: CollectionMap): void {
-  window.localStorage.setItem(COLLECTION_STORAGE_KEY, JSON.stringify(map));
-}
-
 export function setCardStatus(
   map: CollectionMap,
   card: CardBrief,
