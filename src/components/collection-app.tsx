@@ -1,23 +1,52 @@
 "use client";
 
-import { Suspense, useMemo } from "react";
+import { Suspense, useCallback, useMemo, useState } from "react";
 
 import { CardGrid } from "@/components/card-grid";
+import { LoadingState } from "@/components/loading-state";
 import { SearchBar } from "@/components/search-bar";
 import { SetBrowser } from "@/components/set-browser";
 import { StatCards } from "@/components/stat-cards";
+import { collectTypes, TypeFilter } from "@/components/type-filter";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useCollection } from "@/hooks/use-collection";
 import {
   type AppTab,
   useCollectionUrl,
 } from "@/hooks/use-collection-url";
+import type { CardBrief } from "@/lib/types";
+
+function cardIsInSet(card: CardBrief, setId: string): boolean {
+  return card.tcgdexId.startsWith(`${setId}-`) || card.tcgdexId === setId;
+}
+
+function filterCards(
+  cards: CardBrief[],
+  query: string,
+  typeFilter: string | null,
+): CardBrief[] {
+  let result = cards;
+
+  if (typeFilter) {
+    result = result.filter((card) => card.types?.includes(typeFilter));
+  }
+
+  const term = query.trim().toLowerCase();
+  if (!term) return result;
+  return result.filter((card) => {
+    const variant = card.variant?.toLowerCase() ?? "";
+    return (
+      card.name.toLowerCase().includes(term) ||
+      card.localId.toLowerCase().includes(term) ||
+      card.id.toLowerCase().includes(term) ||
+      variant.includes(term)
+    );
+  });
+}
 
 function CollectionAppContent() {
   const {
     owned,
-    wanted,
-    counts,
     getStatus,
     updateStatus,
     error: collectionError,
@@ -34,47 +63,92 @@ function CollectionAppContent() {
     setSerie,
   } = useCollectionUrl();
 
+  const [typeFilter, setTypeFilter] = useState<string | null>(null);
+  const [prevTab, setPrevTab] = useState(tab);
+  const [loadedSet, setLoadedSet] = useState<{
+    id: string;
+    cards: CardBrief[];
+  } | null>(null);
+
+  if (prevTab !== tab) {
+    setPrevTab(tab);
+    setTypeFilter(null);
+  }
+
   const ownedCardIds = useMemo(
     () => owned.map((entry) => entry.card.id),
     [owned],
   );
+  const ownedCardIdSet = useMemo(() => new Set(ownedCardIds), [ownedCardIds]);
+  const setCards =
+    setId && loadedSet?.id === setId ? loadedSet.cards : null;
 
-  const filteredOwned = useMemo(() => {
-    const term = query.trim().toLowerCase();
+  const handleSetCardsChange = useCallback(
+    (loadedSetId: string, cards: CardBrief[]) => {
+      setLoadedSet({ id: loadedSetId, cards });
+    },
+    [],
+  );
+
+  // Com uma coleção aberta, "Tenho" e "Faltam" são derivados das cartas dela.
+  const ownedCards = useMemo(() => {
+    if (setCards) {
+      return setCards.filter((card) => ownedCardIdSet.has(card.id));
+    }
     const cards = owned.map((entry) => entry.card);
-    if (!term) return cards;
-    return cards.filter(
-      (card) =>
-        card.name.toLowerCase().includes(term) ||
-        card.localId.toLowerCase().includes(term) ||
-        card.id.toLowerCase().includes(term),
-    );
-  }, [owned, query]);
+    return setId ? cards.filter((card) => cardIsInSet(card, setId)) : cards;
+  }, [owned, ownedCardIdSet, setCards, setId]);
+  const missingCards = useMemo(
+    () => setCards?.filter((card) => !ownedCardIdSet.has(card.id)) ?? [],
+    [ownedCardIdSet, setCards],
+  );
 
-  const filteredWanted = useMemo(() => {
-    const term = query.trim().toLowerCase();
-    const cards = wanted.map((entry) => entry.card);
-    if (!term) return cards;
-    return cards.filter(
-      (card) =>
-        card.name.toLowerCase().includes(term) ||
-        card.localId.toLowerCase().includes(term) ||
-        card.id.toLowerCase().includes(term),
-    );
-  }, [wanted, query]);
+  const ownedTypes = useMemo(() => collectTypes(ownedCards), [ownedCards]);
+  const missingTypes = useMemo(
+    () => collectTypes(missingCards),
+    [missingCards],
+  );
+
+  const filteredOwned = useMemo(
+    () => filterCards(ownedCards, query, typeFilter),
+    [ownedCards, query, typeFilter],
+  );
+
+  const filteredMissing = useMemo(
+    () => filterCards(missingCards, query, typeFilter),
+    [missingCards, query, typeFilter],
+  );
 
   const searchPlaceholder =
     tab === "owned"
       ? "Buscar nas cartas que tenho…"
       : tab === "wanted"
-        ? "Buscar nas cartas que preciso…"
+        ? "Buscar nas cartas que faltam…"
         : setId
           ? "Buscar carta nesta coleção…"
           : "Buscar coleção…";
 
+  const setBrowser = (
+    <SetBrowser
+      setId={setId}
+      query={query}
+      serie={serie}
+      onSerieChange={setSerie}
+      ownedCardIds={ownedCardIds}
+      getStatus={getStatus}
+      onStatusChange={updateStatus}
+      onSetCardsChange={handleSetCardsChange}
+    />
+  );
+
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6 px-4 py-8 sm:px-6">
-      <StatCards owned={counts.owned} wanted={counts.wanted} />
+      {setId ? (
+        <StatCards
+          owned={ownedCards.length}
+          missing={setCards ? missingCards.length : null}
+        />
+      ) : null}
 
       {isCollectionLoading ? (
         <p className="text-sm text-muted-foreground">Carregando coleção…</p>
@@ -91,6 +165,9 @@ function CollectionAppContent() {
         placeholder={searchPlaceholder}
       />
 
+      {!setId ? (
+        setBrowser
+      ) : (
       <Tabs
         value={tab}
         onValueChange={(value) => {
@@ -100,49 +177,60 @@ function CollectionAppContent() {
         }}
       >
         <TabsList>
-          <TabsTrigger value="sets">Coleções</TabsTrigger>
-          <TabsTrigger value="owned">Tenho ({counts.owned})</TabsTrigger>
-          <TabsTrigger value="wanted">Preciso ({counts.wanted})</TabsTrigger>
+          <TabsTrigger value="sets">Todas</TabsTrigger>
+          <TabsTrigger value="owned">Tenho ({ownedCards.length})</TabsTrigger>
+          <TabsTrigger value="wanted">
+            Faltam ({setCards ? missingCards.length : "—"})
+          </TabsTrigger>
         </TabsList>
 
-        <TabsContent value="sets" className="mt-4">
-          <SetBrowser
-            setId={setId}
-            query={query}
-            serie={serie}
-            onSerieChange={setSerie}
-            ownedCardIds={ownedCardIds}
-            getStatus={getStatus}
-            onStatusChange={updateStatus}
-          />
+        <TabsContent value="sets" className="mt-4" keepMounted>
+          {setBrowser}
         </TabsContent>
 
-        <TabsContent value="owned" className="mt-4">
+        <TabsContent value="owned" className="mt-4 space-y-4">
+          <TypeFilter
+            types={ownedTypes}
+            selected={typeFilter}
+            onSelect={setTypeFilter}
+          />
           <CardGrid
             cards={filteredOwned}
             getStatus={getStatus}
             onStatusChange={updateStatus}
             emptyMessage={
-              query
+              query || typeFilter
                 ? "Nenhuma carta encontrada em “Tenho”."
-                : "Você ainda não marcou nenhuma carta como “Tenho”."
+                : "Nenhuma carta desta coleção marcada como “Tenho”."
             }
           />
         </TabsContent>
 
-        <TabsContent value="wanted" className="mt-4">
-          <CardGrid
-            cards={filteredWanted}
-            getStatus={getStatus}
-            onStatusChange={updateStatus}
-            emptyMessage={
-              query
-                ? "Nenhuma carta encontrada em “Preciso”."
-                : "Nenhuma carta na lista de “Preciso” ainda."
-            }
-          />
+        <TabsContent value="wanted" className="mt-4 space-y-4">
+          {setId && !setCards ? (
+            <LoadingState message="Calculando as cartas que faltam…" />
+          ) : (
+            <>
+              <TypeFilter
+                types={missingTypes}
+                selected={typeFilter}
+                onSelect={setTypeFilter}
+              />
+              <CardGrid
+                cards={filteredMissing}
+                getStatus={getStatus}
+                onStatusChange={updateStatus}
+                emptyMessage={
+                  query || typeFilter
+                    ? "Nenhuma carta encontrada em “Faltam”."
+                    : "Você já tem todas as cartas desta coleção."
+                }
+              />
+            </>
+          )}
         </TabsContent>
       </Tabs>
+      )}
     </div>
   );
 }

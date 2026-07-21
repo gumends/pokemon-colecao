@@ -1,9 +1,14 @@
 "use client";
 
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
+import { Button } from "@/components/ui/button";
+
 import { CardGrid } from "@/components/card-grid";
+import { LoadingState } from "@/components/loading-state";
 import { SetGrid } from "@/components/set-grid";
+import { collectTypes, TypeFilter } from "@/components/type-filter";
 import { Badge } from "@/components/ui/badge";
 import {
   Select,
@@ -14,7 +19,6 @@ import {
 } from "@/components/ui/select";
 import {
   getSerie,
-  getSet,
   listSeries,
   listSets,
   ownedCountInSet,
@@ -26,6 +30,17 @@ import type {
   SetBrief,
   SetDetail,
 } from "@/lib/types";
+import { VARIANT_LABELS } from "@/lib/types";
+
+/** Layouts de pasta: colunas x linhas por página. */
+const BINDER_LAYOUTS: Record<string, { cols: number; rows: number } | null> = {
+  none: null,
+  "2x2": { cols: 2, rows: 2 },
+  "3x3": { cols: 3, rows: 3 },
+  "4x3": { cols: 4, rows: 3 },
+  "4x4": { cols: 4, rows: 4 },
+  "5x4": { cols: 5, rows: 4 },
+};
 
 type SetBrowserProps = {
   setId: string | null;
@@ -35,6 +50,7 @@ type SetBrowserProps = {
   ownedCardIds: string[];
   getStatus: (cardId: string) => CollectionStatus | null;
   onStatusChange: (card: CardBrief, status: CollectionStatus | null) => void;
+  onSetCardsChange: (setId: string, cards: CardBrief[]) => void;
 };
 
 export function SetBrowser({
@@ -45,11 +61,15 @@ export function SetBrowser({
   ownedCardIds,
   getStatus,
   onStatusChange,
+  onSetCardsChange,
 }: SetBrowserProps) {
   const [series, setSeries] = useState<SerieBrief[]>([]);
   const [sets, setSets] = useState<SetBrief[]>([]);
   const [serieSetIds, setSerieSetIds] = useState<Set<string> | null>(null);
   const [setDetail, setSetDetail] = useState<SetDetail | null>(null);
+  const [typeFilter, setTypeFilter] = useState<string | null>(null);
+  const [binder, setBinder] = useState<string>("none");
+  const [page, setPage] = useState(0);
   const [isLoadingSets, setIsLoadingSets] = useState(true);
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -107,6 +127,13 @@ export function SetBrowser({
     return () => controller.abort();
   }, [serie]);
 
+  const [prevSetId, setPrevSetId] = useState(setId);
+  if (prevSetId !== setId) {
+    setPrevSetId(setId);
+    setTypeFilter(null);
+    setPage(0);
+  }
+
   useEffect(() => {
     if (!setId) {
       setSetDetail(null);
@@ -117,9 +144,21 @@ export function SetBrowser({
     setIsLoadingDetail(true);
     setError(null);
 
-    void getSet(setId, controller.signal)
-      .then((detail) => {
-        setSetDetail(detail);
+    void fetch(`/api/sets/${encodeURIComponent(setId)}/cards`, {
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error("Não foi possível abrir esta coleção.");
+        }
+        return (await response.json()) as {
+          set: SetDetail;
+          cards: CardBrief[];
+        };
+      })
+      .then((data) => {
+        setSetDetail({ ...data.set, cards: data.cards });
+        onSetCardsChange(setId, data.cards);
       })
       .catch((err: unknown) => {
         if ((err as Error).name === "AbortError") return;
@@ -135,7 +174,7 @@ export function SetBrowser({
       });
 
     return () => controller.abort();
-  }, [setId]);
+  }, [setId, onSetCardsChange]);
 
   const filteredSets = useMemo(() => {
     const term = query.trim().toLowerCase();
@@ -150,21 +189,45 @@ export function SetBrowser({
     });
   }, [sets, serieSetIds, query]);
 
+  const availableTypes = useMemo(
+    () => collectTypes(setDetail?.cards ?? []),
+    [setDetail],
+  );
+
   const filteredCards = useMemo(() => {
-    const cards = setDetail?.cards ?? [];
+    let cards = setDetail?.cards ?? [];
+
+    if (typeFilter) {
+      cards = cards.filter((card) => card.types?.includes(typeFilter));
+    }
+
     const term = query.trim().toLowerCase();
     if (!term) return cards;
-    return cards.filter(
-      (card) =>
+    return cards.filter((card) => {
+      const variantLabel = VARIANT_LABELS[card.variant]?.toLowerCase() ?? "";
+      return (
         card.name.toLowerCase().includes(term) ||
         card.localId.toLowerCase().includes(term) ||
-        card.id.toLowerCase().includes(term),
-    );
-  }, [setDetail, query]);
+        card.tcgdexId.toLowerCase().includes(term) ||
+        variantLabel.includes(term) ||
+        card.variant.toLowerCase().includes(term)
+      );
+    });
+  }, [setDetail, query, typeFilter]);
 
   if (setId) {
     const ownedInSet = ownedCountInSet(setId, ownedCardIds);
-    const total = setDetail?.cardCount.total ?? 0;
+    const total = setDetail?.cards.length ?? 0;
+
+    const binderSize = BINDER_LAYOUTS[binder];
+    const pageSize = binderSize ? binderSize.cols * binderSize.rows : null;
+    const pageCount = pageSize
+      ? Math.max(1, Math.ceil(filteredCards.length / pageSize))
+      : 1;
+    const safePage = Math.min(page, pageCount - 1);
+    const visibleCards = pageSize
+      ? filteredCards.slice(safePage * pageSize, (safePage + 1) * pageSize)
+      : filteredCards;
 
     return (
       <div className="space-y-4">
@@ -175,12 +238,47 @@ export function SetBrowser({
                 {setDetail.name}
               </h2>
               <p className="text-sm text-muted-foreground">
-                {setDetail.serie?.name ?? "Coleção"} · {setDetail.id}
+                {setDetail.serie?.name ?? "Coleção"} · {setDetail.id} · {total}{" "}
+                variantes
               </p>
             </div>
             <Badge variant="secondary" className="ml-auto">
               {ownedInSet}/{total} tenho
             </Badge>
+          </div>
+        ) : null}
+
+        {setDetail && !isLoadingDetail ? (
+          <div className="flex flex-wrap items-center gap-3">
+            <TypeFilter
+              types={availableTypes}
+              selected={typeFilter}
+              onSelect={(type) => {
+                setTypeFilter(type);
+                setPage(0);
+              }}
+            />
+            <Select
+              value={binder}
+              onValueChange={(value) => {
+                if (typeof value === "string") {
+                  setBinder(value);
+                  setPage(0);
+                }
+              }}
+            >
+              <SelectTrigger className="h-9 w-40 rounded-xl sm:ml-auto">
+                <SelectValue placeholder="Modelo da pasta" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">Sem pasta</SelectItem>
+                <SelectItem value="2x2">Pasta 2x2</SelectItem>
+                <SelectItem value="3x3">Pasta 3x3</SelectItem>
+                <SelectItem value="4x3">Pasta 4x3</SelectItem>
+                <SelectItem value="4x4">Pasta 4x4</SelectItem>
+                <SelectItem value="5x4">Pasta 5x4</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
         ) : null}
 
@@ -190,18 +288,48 @@ export function SetBrowser({
           </p>
         ) : null}
 
-        <CardGrid
-          cards={filteredCards}
-          getStatus={getStatus}
-          onStatusChange={onStatusChange}
-          emptyMessage={
-            isLoadingDetail
-              ? "Carregando cartas da coleção…"
-              : query
-                ? "Nenhuma carta encontrada nesta coleção."
-                : "Esta coleção não tem cartas listadas."
-          }
-        />
+        {isLoadingDetail ? (
+          <LoadingState message="Carregando variantes das cartas…" />
+        ) : (
+          <>
+            <CardGrid
+              cards={visibleCards}
+              getStatus={getStatus}
+              onStatusChange={onStatusChange}
+              columns={binderSize?.cols}
+              emptyMessage={
+                query || typeFilter
+                  ? "Nenhuma carta encontrada com esse filtro."
+                  : "Esta coleção não tem cartas listadas."
+              }
+            />
+            {binderSize && filteredCards.length > 0 ? (
+              <div className="flex items-center justify-center gap-4">
+                <Button
+                  size="icon-sm"
+                  variant="outline"
+                  aria-label="Página anterior"
+                  disabled={safePage === 0}
+                  onClick={() => setPage(safePage - 1)}
+                >
+                  <ChevronLeft />
+                </Button>
+                <span className="text-sm text-muted-foreground">
+                  Página {safePage + 1} de {pageCount}
+                </span>
+                <Button
+                  size="icon-sm"
+                  variant="outline"
+                  aria-label="Próxima página"
+                  disabled={safePage >= pageCount - 1}
+                  onClick={() => setPage(safePage + 1)}
+                >
+                  <ChevronRight />
+                </Button>
+              </div>
+            ) : null}
+          </>
+        )}
       </div>
     );
   }
@@ -233,15 +361,15 @@ export function SetBrowser({
         </p>
       ) : null}
 
-      <SetGrid
-        sets={filteredSets}
-        ownedCardIds={ownedCardIds}
-        emptyMessage={
-          isLoadingSets
-            ? "Carregando coleções…"
-            : "Nenhuma coleção encontrada com esse filtro."
-        }
-      />
+      {isLoadingSets ? (
+        <LoadingState message="Carregando coleções…" />
+      ) : (
+        <SetGrid
+          sets={filteredSets}
+          ownedCardIds={ownedCardIds}
+          emptyMessage="Nenhuma coleção encontrada com esse filtro."
+        />
+      )}
     </div>
   );
 }

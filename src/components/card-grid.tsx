@@ -8,6 +8,15 @@ type CardGridProps = {
   getStatus: (cardId: string) => CollectionStatus | null;
   onStatusChange: (card: CardBrief, status: CollectionStatus | null) => void;
   emptyMessage: string;
+  /** Número fixo de colunas (modo pasta). Sem valor, usa a grade responsiva. */
+  columns?: number;
+};
+
+const COLUMN_CLASSES: Record<number, string> = {
+  2: "grid-cols-2",
+  3: "grid-cols-3",
+  4: "grid-cols-4",
+  5: "grid-cols-5",
 };
 
 export function CardGrid({
@@ -15,6 +24,7 @@ export function CardGrid({
   getStatus,
   onStatusChange,
   emptyMessage,
+  columns,
 }: CardGridProps) {
   if (cards.length === 0) {
     return (
@@ -24,8 +34,13 @@ export function CardGrid({
     );
   }
 
+  const gridClass =
+    columns && COLUMN_CLASSES[columns]
+      ? `grid gap-4 ${COLUMN_CLASSES[columns]}`
+      : "grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4";
+
   return (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+    <div className={gridClass}>
       {cards.map((card) => (
         <CardItem
           key={card.id}

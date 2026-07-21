@@ -43,3 +43,6 @@ next-env.d.ts
 # local SQLite database
 /data/*.db
 /data/*.db-*
+
+# local data directory
+data/

@@ -6,13 +6,14 @@ export function setCardStatus(
   status: CollectionStatus | null,
 ): CollectionMap {
   const next = { ...map };
+  const entryId = card.id;
 
   if (status === null) {
-    delete next[card.id];
+    delete next[entryId];
     return next;
   }
 
-  next[card.id] = {
+  next[entryId] = {
     card,
     status,
     updatedAt: new Date().toISOString(),

@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, Heart, X } from "lucide-react";
+import { Check } from "lucide-react";
 import Image from "next/image";
 
 import { Badge } from "@/components/ui/badge";
@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/card";
 import { cardImageUrl } from "@/lib/tcgdex";
 import type { CardBrief, CollectionStatus } from "@/lib/types";
+import { VARIANT_LABELS } from "@/lib/types";
 
 type CardItemProps = {
   card: CardBrief;
@@ -22,6 +23,7 @@ type CardItemProps = {
 
 export function CardItem({ card, status, onStatusChange }: CardItemProps) {
   const imageSrc = cardImageUrl(card.image, "low");
+  const variantLabel = VARIANT_LABELS[card.variant] ?? card.variant;
 
   return (
     <Card size="sm" className="bg-card/90 transition-transform hover:-translate-y-0.5">
@@ -30,7 +32,7 @@ export function CardItem({ card, status, onStatusChange }: CardItemProps) {
           {imageSrc ? (
             <Image
               src={imageSrc}
-              alt={card.name}
+              alt={`${card.name} (${variantLabel})`}
               fill
               sizes="180px"
               className="object-contain"
@@ -43,52 +45,22 @@ export function CardItem({ card, status, onStatusChange }: CardItemProps) {
         </div>
         <div className="flex items-start justify-between gap-2">
           <CardTitle className="line-clamp-2">{card.name}</CardTitle>
-          {status === "owned" ? (
-            <Badge className="bg-emerald-700 text-emerald-50">Tenho</Badge>
-          ) : null}
-          {status === "wanted" ? (
-            <Badge className="bg-amber-600 text-amber-50">Preciso</Badge>
-          ) : null}
+          {status === "owned" ? <Badge>Tenho</Badge> : null}
         </div>
-        <p className="text-xs text-muted-foreground">#{card.localId}</p>
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge variant="outline">{variantLabel}</Badge>
+          <p className="text-xs text-muted-foreground">#{card.localId}</p>
+        </div>
       </CardHeader>
       <CardFooter className="flex flex-wrap gap-2 border-t-0 bg-transparent">
         <Button
           size="sm"
           variant={status === "owned" ? "default" : "outline"}
-          className={
-            status === "owned"
-              ? "bg-emerald-700 text-white hover:bg-emerald-700/90"
-              : undefined
-          }
           onClick={() => onStatusChange(status === "owned" ? null : "owned")}
         >
           <Check data-icon="inline-start" />
           Tenho
         </Button>
-        <Button
-          size="sm"
-          variant={status === "wanted" ? "default" : "outline"}
-          className={
-            status === "wanted"
-              ? "bg-amber-600 text-white hover:bg-amber-600/90"
-              : undefined
-          }
-          onClick={() => onStatusChange(status === "wanted" ? null : "wanted")}
-        >
-          <Heart data-icon="inline-start" />
-          Preciso
-        </Button>
-        {status ? (
-          <Button
-            size="icon-sm"
-            variant="ghost"
-            aria-label="Remover da coleção"
-            onClick={() => onStatusChange(null)}
-          >
-            <X />
-          </Button>
-        ) : null}
       </CardFooter>
     </Card>
   );
