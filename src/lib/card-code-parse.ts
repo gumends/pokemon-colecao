@@ -5,6 +5,8 @@ export type ParsedCardCode = {
   number: string;
   total?: string;
   rawMatch: string;
+  /** Maior = mais confiável (precisa de barra e set conhecido). */
+  score: number;
 };
 
 const LANG_MARKERS = new Set(["PT", "EN", "ES", "DE", "FR", "IT", "JP", "KO"]);
@@ -15,7 +17,6 @@ export function normalizeOcrText(text: string): string {
     .toUpperCase()
     .replace(/[|\\]/g, "/")
     .replace(/[^\w\s/]/g, " ")
-    // O/0 trocados perto de dígitos
     .replace(/\bO(?=\d)/g, "0")
     .replace(/(?<=\d)O\b/g, "0")
     .replace(/\bO(\d{2,3})\b/g, "0$1")
@@ -23,143 +24,126 @@ export function normalizeOcrText(text: string): string {
     .trim();
 }
 
-/**
- * Exemplos aceitos:
- * - CRI 083/086
- * - CRI PT 112/086  (idioma entre set e número)
- * - CRIPT 112/086
- * - SVI 001
- * - texto OCR quebrado com 112 / 086 e CRI perto
- */
-export function parseCardCodeFromText(text: string): ParsedCardCode | null {
+function pushCandidate(
+  list: ParsedCardCode[],
+  candidate: Omit<ParsedCardCode, "score"> & { score: number },
+) {
+  if (LANG_MARKERS.has(candidate.abbreviation)) return;
+  if (!/^[A-Z]{2,4}$/.test(candidate.abbreviation)) return;
+  const num = Number(candidate.number);
+  if (!Number.isFinite(num) || num < 1 || num > 400) return;
+  list.push(candidate);
+}
+
+/** Coleta candidatos ranqueados a partir de um texto OCR. */
+export function collectCardCodeCandidates(text: string): ParsedCardCode[] {
   const normalized = normalizeOcrText(text);
-  if (!normalized) return null;
+  if (!normalized) return [];
+  const found: ParsedCardCode[] = [];
 
-  // CRI PT 112/086  |  CRI 112/086  |  SVI 001/198
-  const withLang = /\b([A-Z]{2,4})\s+(?:PT|EN|ES|DE|FR|IT|JP|KO)\s+(\d{1,3})\s*\/\s*(\d{1,3})\b/.exec(
-    normalized,
-  );
-  if (withLang && !LANG_MARKERS.has(withLang[1])) {
-    return {
-      abbreviation: withLang[1],
-      number: withLang[2].padStart(3, "0"),
-      total: withLang[3].padStart(3, "0"),
-      rawMatch: withLang[0],
-    };
+  const withLang =
+    /\b([A-Z]{3})\s+(?:PT|EN|ES|DE|FR|IT|JP|KO)\s+(\d{1,3})\s*\/\s*(\d{1,3})\b/g;
+  for (const match of normalized.matchAll(withLang)) {
+    pushCandidate(found, {
+      abbreviation: match[1],
+      number: match[2].padStart(3, "0"),
+      total: match[3].padStart(3, "0"),
+      rawMatch: match[0],
+      score: 100,
+    });
   }
 
-  // CRIPT112/086 (idioma colado)
   const gluedLang =
-    /\b([A-Z]{3})(?:PT|EN|ES|DE|FR|IT|JP|KO)\s*(\d{1,3})\s*\/\s*(\d{1,3})\b/.exec(
-      normalized,
-    );
-  if (gluedLang) {
-    return {
-      abbreviation: gluedLang[1],
-      number: gluedLang[2].padStart(3, "0"),
-      total: gluedLang[3].padStart(3, "0"),
-      rawMatch: gluedLang[0],
-    };
+    /\b([A-Z]{3})(?:PT|EN|ES|DE|FR|IT|JP|KO)\s*(\d{1,3})\s*\/\s*(\d{1,3})\b/g;
+  for (const match of normalized.matchAll(gluedLang)) {
+    pushCandidate(found, {
+      abbreviation: match[1],
+      number: match[2].padStart(3, "0"),
+      total: match[3].padStart(3, "0"),
+      rawMatch: match[0],
+      score: 95,
+    });
   }
 
-  const withTotal =
-    /\b([A-Z]{2,4})\s*[- ]?\s*(\d{1,3})\s*\/\s*(\d{1,3})\b/.exec(normalized);
-  if (withTotal && !LANG_MARKERS.has(withTotal[1])) {
-    return {
-      abbreviation: withTotal[1],
-      number: withTotal[2].padStart(3, "0"),
-      total: withTotal[3].padStart(3, "0"),
-      rawMatch: withTotal[0],
-    };
+  const withTotal = /\b([A-Z]{3})\s+(\d{1,3})\s*\/\s*(\d{1,3})\b/g;
+  for (const match of normalized.matchAll(withTotal)) {
+    pushCandidate(found, {
+      abbreviation: match[1],
+      number: match[2].padStart(3, "0"),
+      total: match[3].padStart(3, "0"),
+      rawMatch: match[0],
+      score: 90,
+    });
   }
 
-  const abbrThenNumber = /\b([A-Z]{2,4})\s+(\d{1,3})\b/.exec(normalized);
-  if (
-    abbrThenNumber &&
-    !LANG_MARKERS.has(abbrThenNumber[1]) &&
-    abbrThenNumber[1].length >= 3
-  ) {
-    return {
-      abbreviation: abbrThenNumber[1],
-      number: abbrThenNumber[2].padStart(3, "0"),
-      rawMatch: abbrThenNumber[0],
-    };
-  }
-
-  // Fallback: achar 112/086 e procurar abreviação de 3 letras perto
+  // Só número XXX/YYY + abreviação de 3 letras no mesmo texto
   const numOnly = /(\d{1,3})\s*\/\s*(\d{1,3})/.exec(normalized);
   if (numOnly) {
-    const pickAbbr = (chunk: string): string | null => {
-      const tokens = chunk.split(" ").filter(Boolean);
-      for (let i = tokens.length - 1; i >= 0; i -= 1) {
-        const token = tokens[i];
-        if (LANG_MARKERS.has(token)) continue;
-        const three = /^(?:([A-Z]{3})(?:PT|EN|ES|DE|FR|IT|JP|KO)?)$/.exec(token);
-        if (three) return three[1];
-        if (/^[A-Z]{3}$/.test(token)) return token;
-      }
-      return null;
-    };
-
-    const before = normalized.slice(0, numOnly.index);
-    const after = normalized.slice(numOnly.index + numOnly[0].length);
-    const abbreviation = pickAbbr(before) ?? pickAbbr(after);
-    if (abbreviation) {
-      return {
+    const abbrs = [...normalized.matchAll(/\b([A-Z]{3})\b/g)]
+      .map((m) => m[1])
+      .filter((a) => !LANG_MARKERS.has(a));
+    for (const abbreviation of abbrs) {
+      pushCandidate(found, {
         abbreviation,
         number: numOnly[1].padStart(3, "0"),
         total: numOnly[2].padStart(3, "0"),
         rawMatch: `${abbreviation} ${numOnly[0]}`,
-      };
-    }
-
-    // OCR às vezes solta "112" e "086" sem barra, já normalizamos O86→086
-    // e ainda achamos um código de 3 letras no texto
-    const anyAbbr = /\b([A-Z]{3})\b/.exec(
-      normalized
-        .split(" ")
-        .filter((t) => !LANG_MARKERS.has(t))
-        .join(" "),
-    );
-    if (anyAbbr && !LANG_MARKERS.has(anyAbbr[1])) {
-      return {
-        abbreviation: anyAbbr[1],
-        number: numOnly[1].padStart(3, "0"),
-        total: numOnly[2].padStart(3, "0"),
-        rawMatch: `${anyAbbr[1]} ${numOnly[0]}`,
-      };
+        score: 70,
+      });
     }
   }
 
-  // Fallback extra: 112 e 086 em linhas separadas + CRI em qualquer lugar
-  const looseNums = normalized.match(/\b(\d{3})\b/g);
-  const looseAbbr = normalized
-    .split(" ")
-    .map((t) => t.replace(/(PT|EN|ES|DE|FR|IT|JP|KO)$/, ""))
-    .find((t) => /^[A-Z]{3}$/.test(t) && !LANG_MARKERS.has(t));
-  if (looseNums && looseNums.length >= 2 && looseAbbr) {
-    return {
-      abbreviation: looseAbbr,
-      number: looseNums[0],
-      total: looseNums[1],
-      rawMatch: `${looseAbbr} ${looseNums[0]}/${looseNums[1]}`,
-    };
+  // Dedup por abbr+number, mantém maior score
+  const best = new Map<string, ParsedCardCode>();
+  for (const item of found) {
+    const key = `${item.abbreviation}-${item.number}`;
+    const prev = best.get(key);
+    if (!prev || item.score > prev.score) best.set(key, item);
   }
-
-  return null;
+  return [...best.values()].sort((a, b) => b.score - a.score);
 }
 
-/** Junta vários textos OCR e tenta parsear o melhor candidato. */
+export function parseCardCodeFromText(text: string): ParsedCardCode | null {
+  return collectCardCodeCandidates(text)[0] ?? null;
+}
+
+/**
+ * Escolhe o melhor código entre várias leituras OCR.
+ * Se `knownAbbreviations` for passado, só aceita sets reais.
+ */
 export function parseCardCodeFromOcrAttempts(
   texts: string[],
+  knownAbbreviations?: Set<string> | string[],
 ): ParsedCardCode | null {
-  const combined = texts.join("\n");
-  const direct = parseCardCodeFromText(combined);
-  if (direct) return direct;
+  const known = knownAbbreviations
+    ? knownAbbreviations instanceof Set
+      ? knownAbbreviations
+      : new Set(knownAbbreviations.map((a) => a.toUpperCase()))
+    : null;
 
-  for (const text of texts) {
-    const parsed = parseCardCodeFromText(text);
-    if (parsed) return parsed;
+  const all = texts.flatMap((text) => collectCardCodeCandidates(text));
+  if (all.length === 0) return null;
+
+  const filtered = known
+    ? all.filter((c) => known.has(c.abbreviation))
+    : all.filter((c) => c.score >= 90); // sem whitelist, exige padrão forte com /
+
+  if (filtered.length === 0) return null;
+
+  // Preferir candidatos que aparecem mais vezes + maior score
+  const ranked = new Map<string, { item: ParsedCardCode; hits: number }>();
+  for (const item of filtered) {
+    const key = `${item.abbreviation}-${item.number}`;
+    const prev = ranked.get(key);
+    if (!prev) ranked.set(key, { item, hits: 1 });
+    else {
+      prev.hits += 1;
+      if (item.score > prev.item.score) prev.item = item;
+    }
   }
-  return null;
+
+  return [...ranked.values()].sort((a, b) => {
+    if (b.hits !== a.hits) return b.hits - a.hits;
+    return b.item.score - a.item.score;
+  })[0]?.item ?? null;
 }
