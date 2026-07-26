@@ -47,3 +47,7 @@ next-env.d.ts
 
 # local data directory
 data/
+
+# Tesseract language data downloaded locally
+*.traineddata
+
