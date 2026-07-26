@@ -1,8 +1,8 @@
 "use client";
 
-import Image from "next/image";
 import Link from "next/link";
 
+import { SetLogo } from "@/components/set-logo";
 import { Badge } from "@/components/ui/badge";
 import {
   Card,
@@ -11,7 +11,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { assetUrl, ownedCountInSet } from "@/lib/tcgdex";
+import { ownedCountInSet } from "@/lib/tcgdex";
 import type { SetBrief } from "@/lib/types";
 
 type SetGridProps = {
@@ -32,7 +32,6 @@ export function SetGrid({ sets, ownedCardIds, emptyMessage }: SetGridProps) {
   return (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
       {sets.map((set) => {
-        const logoSrc = assetUrl(set.logo) ?? assetUrl(set.symbol, "png");
         const owned = ownedCountInSet(set.id, ownedCardIds);
         const total = set.cardCount.total;
 
@@ -45,17 +44,7 @@ export function SetGrid({ sets, ownedCardIds, emptyMessage }: SetGridProps) {
             <Card size="sm" className="h-full bg-card/90">
               <CardHeader>
                 <div className="flex h-16 items-center justify-center rounded-lg bg-muted/60 px-3">
-                  {logoSrc ? (
-                    <Image
-                      src={logoSrc}
-                      alt=""
-                      width={160}
-                      height={48}
-                      className="max-h-12 w-auto object-contain"
-                    />
-                  ) : (
-                    <span className="text-xs text-muted-foreground">Sem logo</span>
-                  )}
+                  <SetLogo set={set} />
                 </div>
                 <CardTitle className="line-clamp-2">{set.name}</CardTitle>
                 <CardDescription>{set.id}</CardDescription>

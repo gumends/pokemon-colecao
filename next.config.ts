@@ -1,7 +1,17 @@
 import type { NextConfig } from "next";
 
+const apiOrigin = process.env.API_INTERNAL_URL?.trim() || "http://127.0.0.1:5080";
+
 const nextConfig: NextConfig = {
-  serverExternalPackages: ["better-sqlite3"],
+  // Acesso por IP na LAN / IP público no modo `next dev`
+  allowedDevOrigins: [
+    "192.168.15.11",
+    "192.168.15.6",
+    "179.135.81.138",
+    "179.135.81.141",
+    "127.0.0.1",
+    "localhost",
+  ],
   images: {
     remotePatterns: [
       {
@@ -13,6 +23,15 @@ const nextConfig: NextConfig = {
         hostname: "raw.githubusercontent.com",
       },
     ],
+  },
+  // Proxy da API .NET na mesma porta 8211 → só precisa abrir TCP 8211 no roteador.
+  async rewrites() {
+    return [
+      {
+        source: "/backend/:path*",
+        destination: `${apiOrigin}/:path*`,
+      },
+    ];
   },
 };
 

@@ -1,20 +1,21 @@
 "use client";
 
-import { Suspense, useCallback, useMemo, useState } from "react";
+import { Suspense, useCallback, useMemo, useState, type ReactNode } from "react";
 
 import { CardGrid } from "@/components/card-grid";
+import { FriendPanel } from "@/components/friend-panel";
 import { LoadingState } from "@/components/loading-state";
 import { SearchBar } from "@/components/search-bar";
 import { SetBrowser } from "@/components/set-browser";
 import { StatCards } from "@/components/stat-cards";
 import { collectTypes, TypeFilter } from "@/components/type-filter";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useCollection } from "@/hooks/use-collection";
 import {
   type AppTab,
   useCollectionUrl,
 } from "@/hooks/use-collection-url";
 import type { CardBrief } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 function cardIsInSet(card: CardBrief, setId: string): boolean {
   return card.tcgdexId.startsWith(`${setId}-`) || card.tcgdexId === setId;
@@ -44,6 +45,31 @@ function filterCards(
   });
 }
 
+function TabButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+        active
+          ? "bg-background text-foreground shadow-sm"
+          : "text-foreground/60 hover:text-foreground",
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
 function CollectionAppContent() {
   const {
     owned,
@@ -58,9 +84,11 @@ function CollectionAppContent() {
     setId,
     query,
     serie,
+    friendCode,
     setTab,
     setQuery,
     setSerie,
+    setFriendCode,
   } = useCollectionUrl();
 
   const [typeFilter, setTypeFilter] = useState<string | null>(null);
@@ -90,7 +118,6 @@ function CollectionAppContent() {
     [],
   );
 
-  // Com uma coleção aberta, "Tenho" e "Faltam" são derivados das cartas dela.
   const ownedCards = useMemo(() => {
     if (setCards) {
       return setCards.filter((card) => ownedCardIdSet.has(card.id));
@@ -124,9 +151,11 @@ function CollectionAppContent() {
       ? "Buscar nas cartas que tenho…"
       : tab === "wanted"
         ? "Buscar nas cartas que faltam…"
-        : setId
-          ? "Buscar carta nesta coleção…"
-          : "Buscar coleção…";
+        : tab === "friend"
+          ? "Buscar nas cartas do amigo…"
+          : setId
+            ? "Buscar carta nesta coleção…"
+            : "Buscar coleção…";
 
   const setBrowser = (
     <SetBrowser
@@ -168,68 +197,88 @@ function CollectionAppContent() {
       {!setId ? (
         setBrowser
       ) : (
-      <Tabs
-        value={tab}
-        onValueChange={(value) => {
-          if (value === "sets" || value === "owned" || value === "wanted") {
-            setTab(value as AppTab);
-          }
-        }}
-      >
-        <TabsList>
-          <TabsTrigger value="sets">Todas</TabsTrigger>
-          <TabsTrigger value="owned">Tenho ({ownedCards.length})</TabsTrigger>
-          <TabsTrigger value="wanted">
-            Faltam ({setCards ? missingCards.length : "—"})
-          </TabsTrigger>
-        </TabsList>
+        <div className="space-y-4">
+          <div className="inline-flex max-w-full flex-wrap gap-1 rounded-lg bg-muted p-1">
+            <TabButton active={tab === "sets"} onClick={() => setTab("sets")}>
+              Todas
+            </TabButton>
+            <TabButton
+              active={tab === "owned"}
+              onClick={() => setTab("owned")}
+            >
+              Tenho ({ownedCards.length})
+            </TabButton>
+            <TabButton
+              active={tab === "wanted"}
+              onClick={() => setTab("wanted")}
+            >
+              Faltam ({setCards ? missingCards.length : "—"})
+            </TabButton>
+            <TabButton
+              active={tab === "friend"}
+              onClick={() => setTab("friend")}
+            >
+              Amigo
+            </TabButton>
+          </div>
 
-        <TabsContent value="sets" className="mt-4" keepMounted>
-          {setBrowser}
-        </TabsContent>
+          {tab === "sets" ? setBrowser : null}
 
-        <TabsContent value="owned" className="mt-4 space-y-4">
-          <TypeFilter
-            types={ownedTypes}
-            selected={typeFilter}
-            onSelect={setTypeFilter}
-          />
-          <CardGrid
-            cards={filteredOwned}
-            getStatus={getStatus}
-            onStatusChange={updateStatus}
-            emptyMessage={
-              query || typeFilter
-                ? "Nenhuma carta encontrada em “Tenho”."
-                : "Nenhuma carta desta coleção marcada como “Tenho”."
-            }
-          />
-        </TabsContent>
-
-        <TabsContent value="wanted" className="mt-4 space-y-4">
-          {setId && !setCards ? (
-            <LoadingState message="Calculando as cartas que faltam…" />
-          ) : (
-            <>
+          {tab === "owned" ? (
+            <div className="space-y-4">
               <TypeFilter
-                types={missingTypes}
+                types={ownedTypes}
                 selected={typeFilter}
                 onSelect={setTypeFilter}
               />
               <CardGrid
-                cards={filteredMissing}
+                cards={filteredOwned}
                 getStatus={getStatus}
                 onStatusChange={updateStatus}
                 emptyMessage={
                   query || typeFilter
-                    ? "Nenhuma carta encontrada em “Faltam”."
-                    : "Você já tem todas as cartas desta coleção."
+                    ? "Nenhuma carta encontrada em “Tenho”."
+                    : "Nenhuma carta desta coleção marcada como “Tenho”."
                 }
               />
-            </>
-          )}
-        </TabsContent>
-      </Tabs>
+            </div>
+          ) : null}
+
+          {tab === "wanted" ? (
+            <div className="space-y-4">
+              {setId && !setCards ? (
+                <LoadingState message="Calculando as cartas que faltam…" />
+              ) : (
+                <>
+                  <TypeFilter
+                    types={missingTypes}
+                    selected={typeFilter}
+                    onSelect={setTypeFilter}
+                  />
+                  <CardGrid
+                    cards={filteredMissing}
+                    getStatus={getStatus}
+                    onStatusChange={updateStatus}
+                    emptyMessage={
+                      query || typeFilter
+                        ? "Nenhuma carta encontrada em “Faltam”."
+                        : "Você já tem todas as cartas desta coleção."
+                    }
+                  />
+                </>
+              )}
+            </div>
+          ) : null}
+
+          {tab === "friend" ? (
+            <FriendPanel
+              setCards={setCards}
+              initialCode={friendCode}
+              onCodeCommit={setFriendCode}
+              query={query}
+            />
+          ) : null}
+        </div>
       )}
     </div>
   );

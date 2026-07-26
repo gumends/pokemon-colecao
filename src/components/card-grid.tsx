@@ -10,6 +10,7 @@ type CardGridProps = {
   emptyMessage: string;
   /** Número fixo de colunas (modo pasta). Sem valor, usa a grade responsiva. */
   columns?: number;
+  readOnly?: boolean;
 };
 
 const COLUMN_CLASSES: Record<number, string> = {
@@ -25,6 +26,7 @@ export function CardGrid({
   onStatusChange,
   emptyMessage,
   columns,
+  readOnly = false,
 }: CardGridProps) {
   if (cards.length === 0) {
     return (
@@ -47,6 +49,7 @@ export function CardGrid({
           card={card}
           status={getStatus(card.id)}
           onStatusChange={(status) => onStatusChange(card, status)}
+          readOnly={readOnly}
         />
       ))}
     </div>

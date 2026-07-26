@@ -3,10 +3,15 @@
 import { useCallback, useMemo } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 
-export type AppTab = "sets" | "owned" | "wanted";
+export type AppTab = "sets" | "owned" | "wanted" | "friend";
 
 function isAppTab(value: string | null): value is AppTab {
-  return value === "sets" || value === "owned" || value === "wanted";
+  return (
+    value === "sets" ||
+    value === "owned" ||
+    value === "wanted" ||
+    value === "friend"
+  );
 }
 
 export function useCollectionUrl() {
@@ -19,6 +24,7 @@ export function useCollectionUrl() {
   const setId = searchParams.get("set");
   const query = searchParams.get("q") ?? "";
   const serie = searchParams.get("serie") ?? "all";
+  const friendCode = searchParams.get("friend") ?? "";
 
   const replaceParams = useCallback(
     (updates: Record<string, string | null>) => {
@@ -61,16 +67,35 @@ export function useCollectionUrl() {
     [replaceParams],
   );
 
+  const setFriendCode = useCallback(
+    (code: string) => {
+      replaceParams({ friend: code.trim().toUpperCase() || null });
+    },
+    [replaceParams],
+  );
+
   return useMemo(
     () => ({
       tab,
       setId,
       query,
       serie,
+      friendCode,
       setTab,
       setQuery,
       setSerie,
+      setFriendCode,
     }),
-    [tab, setId, query, serie, setTab, setQuery, setSerie],
+    [
+      tab,
+      setId,
+      query,
+      serie,
+      friendCode,
+      setTab,
+      setQuery,
+      setSerie,
+      setFriendCode,
+    ],
   );
 }

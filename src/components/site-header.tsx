@@ -1,7 +1,15 @@
+"use client";
+
 import Image from "next/image";
 import Link from "next/link";
 
+import { ProfileButton } from "@/components/profile-dialog";
+import { Button } from "@/components/ui/button";
+import { useAuth } from "@/hooks/use-auth";
+
 export function SiteHeader() {
+  const { user, logout, isLoading } = useAuth();
+
   return (
     <header className="border-b border-white/10 bg-black text-white">
       <div className="mx-auto flex w-full max-w-6xl items-center gap-4 px-4 py-4 sm:px-6">
@@ -15,13 +23,29 @@ export function SiteHeader() {
           />
           <div>
             <p className="font-heading text-lg font-semibold tracking-tight sm:text-xl">
-              PokéColeção
+              Pokemon TCG
             </p>
             <p className="text-xs text-white/60 sm:text-sm">
-              Gerencie o que você tem e o que ainda precisa
+              {user
+                ? `Olá, ${user.name}`
+                : "Gerencie o que você tem e o que ainda precisa"}
             </p>
           </div>
         </Link>
+
+        {!isLoading && user ? (
+          <div className="ml-auto flex items-center gap-2">
+            <ProfileButton />
+            <Button
+              variant="outline"
+              size="sm"
+              className="border-white/20 bg-transparent text-white hover:bg-white/10 hover:text-white"
+              onClick={() => void logout()}
+            >
+              Sair
+            </Button>
+          </div>
+        ) : null}
       </div>
     </header>
   );

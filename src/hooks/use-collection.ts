@@ -2,20 +2,35 @@
 
 import { useCallback, useEffect, useState } from "react";
 
+import { apiFetch } from "@/lib/api-client";
 import { countByStatus, setCardStatus } from "@/lib/collection-store";
 import type { CardBrief, CollectionMap, CollectionStatus } from "@/lib/types";
+import { useAuth } from "@/hooks/use-auth";
 
 export function useCollection() {
+  const { user } = useAuth();
   const [collection, setCollection] = useState<CollectionMap>({});
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
+    if (!user) {
+      setCollection({});
+      setIsLoading(false);
+      setError(null);
+      return;
+    }
+
     setIsLoading(true);
     setError(null);
 
     try {
-      const response = await fetch("/api/collection");
+      const response = await apiFetch("/api/collection");
+      if (response.status === 401) {
+        setCollection({});
+        setError("Faça login para acessar sua coleção.");
+        return;
+      }
       if (!response.ok) {
         throw new Error("Falha ao carregar a coleção.");
       }
@@ -24,12 +39,14 @@ export function useCollection() {
       setCollection(data.collection ?? {});
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : "Não foi possível carregar a coleção.",
+        err instanceof Error
+          ? err.message
+          : "Não foi possível carregar a coleção.",
       );
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [user]);
 
   useEffect(() => {
     void refresh();
@@ -37,14 +54,17 @@ export function useCollection() {
 
   const counts = countByStatus(collection);
 
-  async function updateStatus(card: CardBrief, status: CollectionStatus | null) {
+  async function updateStatus(
+    card: CardBrief,
+    status: CollectionStatus | null,
+  ) {
     const previous = collection;
     setCollection(setCardStatus(collection, card, status));
     setError(null);
 
     try {
       if (status === null) {
-        const response = await fetch(
+        const response = await apiFetch(
           `/api/collection?cardId=${encodeURIComponent(card.id)}`,
           { method: "DELETE" },
         );
@@ -54,9 +74,8 @@ export function useCollection() {
         return;
       }
 
-      const response = await fetch("/api/collection", {
+      const response = await apiFetch("/api/collection", {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ card, status }),
       });
 
@@ -66,7 +85,9 @@ export function useCollection() {
     } catch (err) {
       setCollection(previous);
       setError(
-        err instanceof Error ? err.message : "Não foi possível atualizar a coleção.",
+        err instanceof Error
+          ? err.message
+          : "Não foi possível atualizar a coleção.",
       );
     }
   }

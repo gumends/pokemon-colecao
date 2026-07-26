@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 
 import { CardGrid } from "@/components/card-grid";
 import { LoadingState } from "@/components/loading-state";
+import { ScrollButtons } from "@/components/scroll-buttons";
 import { SetGrid } from "@/components/set-grid";
 import { collectTypes, TypeFilter } from "@/components/type-filter";
 import { Badge } from "@/components/ui/badge";
@@ -231,6 +232,7 @@ export function SetBrowser({
 
     return (
       <div className="space-y-4">
+        <ScrollButtons />
         {setDetail ? (
           <div className="flex flex-wrap items-center gap-3">
             <div>
@@ -259,24 +261,24 @@ export function SetBrowser({
               }}
             />
             <Select
-              value={binder}
+              value={binder === "none" ? null : binder}
               onValueChange={(value) => {
-                if (typeof value === "string") {
-                  setBinder(value);
-                  setPage(0);
-                }
+                const next =
+                  typeof value === "string" && value.length > 0 ? value : "none";
+                setBinder(next);
+                setPage(0);
               }}
             >
-              <SelectTrigger className="h-9 w-40 rounded-xl sm:ml-auto">
-                <SelectValue placeholder="Modelo da pasta" />
+              <SelectTrigger className="h-9 w-36 rounded-xl sm:ml-auto">
+                <SelectValue placeholder="Pasta" />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="none">Sem pasta</SelectItem>
-                <SelectItem value="2x2">Pasta 2x2</SelectItem>
-                <SelectItem value="3x3">Pasta 3x3</SelectItem>
-                <SelectItem value="4x3">Pasta 4x3</SelectItem>
-                <SelectItem value="4x4">Pasta 4x4</SelectItem>
-                <SelectItem value="5x4">Pasta 5x4</SelectItem>
+                <SelectItem value="2x2">2×2</SelectItem>
+                <SelectItem value="3x3">3×3</SelectItem>
+                <SelectItem value="4x3">4×3</SelectItem>
+                <SelectItem value="4x4">4×4</SelectItem>
+                <SelectItem value="5x4">5×4</SelectItem>
               </SelectContent>
             </Select>
           </div>

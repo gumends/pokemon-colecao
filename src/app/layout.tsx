@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { Outfit, Source_Sans_3 } from "next/font/google";
 
-import { SiteHeader } from "@/components/site-header";
+import { RootProviders } from "@/components/root-providers";
 
 import "./globals.css";
 
@@ -18,7 +18,7 @@ const sourceSans = Source_Sans_3({
 });
 
 export const metadata: Metadata = {
-  title: "PokéColeção | Gerenciador de cartas Pokémon TCG",
+  title: "Pokemon TCG | Gerenciador de cartas",
   description:
     "Busque cartas Pokémon TCG e organize o que você tem e o que ainda precisa na sua coleção.",
 };
@@ -32,10 +32,20 @@ export default function RootLayout({
     <html
       lang="pt-BR"
       className={`${outfit.variable} ${sourceSans.variable} h-full antialiased`}
+      suppressHydrationWarning
     >
-      <body className="flex min-h-full flex-col bg-background font-sans text-foreground">
-        <SiteHeader />
-        {children}
+      <head>
+        {/* iOS Safari injeta links em números/datas e quebra a hidratação do React */}
+        <meta
+          name="format-detection"
+          content="telephone=no, date=no, email=no, address=no"
+        />
+      </head>
+      <body
+        className="flex min-h-full flex-col bg-background font-sans text-foreground"
+        suppressHydrationWarning
+      >
+        <RootProviders>{children}</RootProviders>
       </body>
     </html>
   );
