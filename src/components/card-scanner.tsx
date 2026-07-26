@@ -1,6 +1,6 @@
 "use client";
 
-import { Camera, ImagePlus, Loader2, ScanLine, X } from "lucide-react";
+import { Camera, ChevronDown, ChevronUp, ImagePlus, Loader2, ScanLine, X } from "lucide-react";
 import Image from "next/image";
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
 
@@ -25,20 +25,16 @@ type CardScannerProps = {
   onStatusChange: (card: CardBrief, status: CollectionStatus | null) => void;
 };
 
+/** Captura a carta inteira (não só o rodapé) para ler todas as palavras. */
 function captureVideoFrame(video: HTMLVideoElement): string | null {
   if (video.videoWidth === 0) return null;
-  // Envia só a faixa inferior (onde fica o código) → OCR mais rápido/preciso
-  const fullW = video.videoWidth;
-  const fullH = video.videoHeight;
-  const sy = Math.floor(fullH * 0.55);
-  const sh = fullH - sy;
   const canvas = document.createElement("canvas");
-  canvas.width = fullW;
-  canvas.height = sh;
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
   const ctx = canvas.getContext("2d");
   if (!ctx) return null;
-  ctx.drawImage(video, 0, sy, fullW, sh, 0, 0, fullW, sh);
-  return canvas.toDataURL("image/jpeg", 0.8);
+  ctx.drawImage(video, 0, 0);
+  return canvas.toDataURL("image/jpeg", 0.85);
 }
 
 export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
@@ -47,24 +43,26 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
   const streamRef = useRef<MediaStream | null>(null);
   const lastFoundRef = useRef<string | null>(null);
   const busyRef = useRef(false);
+  const foundLockRef = useRef(false);
   const stableRef = useRef<{ hash: string; count: number } | null>(null);
 
   const [cameraOpen, setCameraOpen] = useState(false);
   const [liveStatus, setLiveStatus] = useState<string | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [ocrText, setOcrText] = useState("");
+  const [ocrExpanded, setOcrExpanded] = useState(false);
   const [abbr, setAbbr] = useState("");
   const [number, setNumber] = useState("");
   const [phase, setPhase] = useState<"idle" | "looking" | "done">("idle");
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<LookupResult | null>(null);
 
-  function stopCamera() {
+  function stopCamera(options?: { keepStatus?: boolean }) {
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
     if (videoRef.current) videoRef.current.srcObject = null;
     setCameraOpen(false);
-    setLiveStatus(null);
+    if (!options?.keepStatus) setLiveStatus(null);
     busyRef.current = false;
     stableRef.current = null;
   }
@@ -90,89 +88,114 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
     setResult(data);
     setAbbr(data.abbreviation);
     setNumber(data.number);
-    setOcrText(data.ocrText ?? "");
+    if (data.ocrText) setOcrText(data.ocrText);
     setPhase("done");
     lastFoundRef.current = data.tcgdexId;
-    setLiveStatus(
-      `Encontrei: ${data.cards[0]?.name ?? data.tcgdexId}${
-        data.strategy ? ` (${data.strategy})` : ""
-      }`,
-    );
   }
 
-  async function scanImageBase64(imageBase64: string) {
-    const response = await fetch("/api/scan-frame", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ imageBase64 }),
-    });
-    const data = (await response.json()) as LookupResult & {
-      ok?: boolean;
-      reason?: string;
-      error?: string;
-      ocrText?: string;
-    };
+  async function scanImageBase64(
+    imageBase64: string,
+    options?: { textOnly?: boolean },
+  ): Promise<{
+    result: LookupResult | null;
+    ocrText: string;
+  }> {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 90_000);
 
-    if (!response.ok) {
-      throw new Error(data.error ?? "Falha no scan.");
+    try {
+      const response = await fetch("/api/scan-frame", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          imageBase64,
+          textOnly: options?.textOnly === true,
+        }),
+        signal: controller.signal,
+      });
+      const data = (await response.json()) as LookupResult & {
+        ok?: boolean;
+        reason?: string;
+        error?: string;
+        ocrText?: string;
+      };
+
+      if (!response.ok) {
+        throw new Error(data.error ?? "Falha no scan.");
+      }
+
+      const text = data.ocrText ?? "";
+      if (text) setOcrText(text);
+
+      if (options?.textOnly || !data.ok || !data.cards) {
+        return { result: null, ocrText: text };
+      }
+
+      return { result: data as LookupResult, ocrText: text };
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") {
+        throw new Error("OCR demorou demais. Tente de novo com a carta mais perto.");
+      }
+      throw err;
+    } finally {
+      window.clearTimeout(timeout);
     }
-
-    setOcrText(data.ocrText ?? "");
-
-    if (!data.ok || !data.cards) {
-      return null;
-    }
-
-    return data as LookupResult;
   }
 
-  // Loop ao vivo: envia frame ao servidor (OCR + lógica inteligente)
+  // Câmera: procura até achar UMA carta → para tudo e mostra embaixo
   useEffect(() => {
     if (!cameraOpen) return;
     let cancelled = false;
+    foundLockRef.current = false;
     lastFoundRef.current = null;
     stableRef.current = null;
+    setPhase("looking");
 
     async function tick() {
-      if (cancelled || busyRef.current) return;
+      if (cancelled || busyRef.current || foundLockRef.current) return;
       const video = videoRef.current;
       if (!video || video.readyState < 2) return;
 
       const frame = captureVideoFrame(video);
       if (!frame) return;
 
-      // estabilidade simples: mesmo tamanho de dataURL ≈ frame parecido
-      // (melhor: hash curto)
       const hash = `${frame.length}:${frame.slice(40, 80)}`;
       const stable = stableRef.current;
       if (stable?.hash === hash) stable.count += 1;
       else stableRef.current = { hash, count: 1 };
 
-      // espera a mão parar um pouco
       if ((stableRef.current?.count ?? 0) < 2) {
-        setLiveStatus("Segure a carta firme no guia…");
+        setLiveStatus("Segure a carta firme no enquadramento…");
         return;
       }
 
       busyRef.current = true;
-      setLiveStatus("Analisando código no servidor…");
+      setLiveStatus("Procurando carta…");
 
       try {
-        const found = await scanImageBase64(frame);
-        if (cancelled) return;
+        const { result: found, ocrText: readText } =
+          await scanImageBase64(frame);
+        if (cancelled || foundLockRef.current) return;
+
         if (!found) {
           setLiveStatus(
-            "Sem tokens colados ainda — preciso de CRI + 112/086 juntos…",
+            readText
+              ? "Ainda procurando… (texto parcial abaixo)"
+              : "Aproxime a carta e segure firme…",
           );
           return;
         }
-        if (lastFoundRef.current === found.tcgdexId) {
-          setLiveStatus(`Código estável: ${found.abbreviation} ${found.number}`);
-          return;
-        }
+
+        // Achou → trava, para câmera, mostra carta. Não procura mais nada.
+        foundLockRef.current = true;
+        cancelled = true;
+        window.clearInterval(intervalId);
         await applyResult(found);
+        const label = found.cards[0]?.name ?? found.tcgdexId;
+        setLiveStatus(`Carta encontrada: ${label}`);
+        stopCamera({ keepStatus: true });
       } catch (err) {
-        if (!cancelled) {
+        if (!cancelled && !foundLockRef.current) {
           setLiveStatus(
             err instanceof Error ? err.message : "Erro ao analisar frame.",
           );
@@ -182,21 +205,24 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
       }
     }
 
-    const id = window.setInterval(() => {
+    const intervalId = window.setInterval(() => {
       void tick();
-    }, 1800);
+    }, 2200);
     void tick();
 
     return () => {
       cancelled = true;
-      window.clearInterval(id);
+      window.clearInterval(intervalId);
     };
   }, [cameraOpen]);
 
   async function openCamera() {
     setError(null);
     setResult(null);
+    setOcrText("");
+    setOcrExpanded(false);
     lastFoundRef.current = null;
+    foundLockRef.current = false;
 
     if (!navigator.mediaDevices?.getUserMedia) {
       setError("Este navegador não permite acessar a webcam.");
@@ -215,8 +241,8 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
       });
       streamRef.current = stream;
       setCameraOpen(true);
-      setLiveStatus("Aponte o código para o guia amarelo…");
-      setPhase("idle");
+      setLiveStatus("Enquadre a carta — ao achar, paro na hora.");
+      setPhase("looking");
     } catch {
       setError(
         "Não consegui abrir a webcam. Permita o acesso à câmera e tente de novo.",
@@ -229,6 +255,8 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
     stopCamera();
     setError(null);
     setResult(null);
+    setOcrText("");
+    setOcrExpanded(false);
     setPhase("looking");
     if (previewUrl) URL.revokeObjectURL(previewUrl);
     setPreviewUrl(URL.createObjectURL(file));
@@ -240,11 +268,24 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
         reader.onerror = () => reject(new Error("Falha ao ler arquivo"));
         reader.readAsDataURL(file);
       });
-      const found = await scanImageBase64(dataUrl);
+
+      // 1) Lê e mostra o texto NA HORA
+      const { ocrText: readText } = await scanImageBase64(dataUrl, {
+        textOnly: true,
+      });
+      if (!readText) {
+        setPhase("idle");
+        setError("Não consegui ler nenhuma palavra. Tente outra foto, mais nítida.");
+        return;
+      }
+
+      // 2) Depois tenta achar o código (sem apagar o texto já mostrado)
+      setLiveStatus("Procurando código CRI + NNN/NNN…");
+      const { result: found } = await scanImageBase64(dataUrl);
       if (!found) {
         setPhase("idle");
         setError(
-          "Não identifiquei a carta. Tente foto mais perto do código (ex.: CRI PT 112/086).",
+          "Texto lido abaixo. Ainda não achei CRI + NNN/NNN colados — use busca manual se quiser.",
         );
         return;
       }
@@ -279,6 +320,11 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
     }
   }
 
+  const ocrPreview =
+    ocrText.length > 280 && !ocrExpanded
+      ? `${ocrText.slice(0, 280).trim()}…`
+      : ocrText;
+
   return (
     <div className="space-y-6">
       <div className="rounded-2xl border border-border bg-card/80 p-4 sm:p-6">
@@ -289,10 +335,9 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
           <div className="space-y-1">
             <h2 className="font-heading text-lg font-semibold">Escanear carta</h2>
             <p className="text-sm text-muted-foreground">
-              Só lê tokens colados:{" "}
-              <span className="font-mono text-foreground">CRI</span> e{" "}
-              <span className="font-mono text-foreground">112/086</span> (barra
-              sem espaço). Letras soltas e números separados são ignorados.
+              Na câmera: enquadre a carta. Quando achar,{" "}
+              <span className="text-foreground">para na hora</span> e mostra
+              embaixo. Também dá para enviar foto.
             </p>
           </div>
         </div>
@@ -330,17 +375,12 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
                 muted
                 className="max-h-80 w-full object-contain"
               />
-              <div className="pointer-events-none absolute inset-x-[8%] bottom-[6%] h-[22%] rounded-md border-2 border-dashed border-yellow-300/90 bg-yellow-300/10" />
-              <p className="pointer-events-none absolute bottom-[8%] left-[10%] text-xs font-medium text-yellow-100 drop-shadow">
-                Código no guia · segure firme
-              </p>
+              <div className="pointer-events-none absolute inset-[6%] rounded-md border-2 border-dashed border-yellow-300/80" />
             </div>
             <div className="flex flex-wrap items-center gap-2">
               {liveStatus ? (
                 <p className="flex items-center gap-2 text-sm text-muted-foreground">
-                  {!liveStatus.startsWith("Encontrei") ? (
-                    <Loader2 className="size-4 animate-spin" />
-                  ) : null}
+                  <Loader2 className="size-4 animate-spin" />
                   {liveStatus}
                 </p>
               ) : null}
@@ -348,7 +388,7 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
                 type="button"
                 variant="outline"
                 className="ml-auto"
-                onClick={stopCamera}
+                onClick={() => stopCamera()}
               >
                 <X className="size-4" />
                 Fechar câmera
@@ -360,7 +400,7 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
         {phase === "looking" && !cameraOpen ? (
           <p className="mt-4 flex items-center gap-2 text-sm text-muted-foreground">
             <Loader2 className="size-4 animate-spin" />
-            Analisando…
+            Lendo todas as palavras da carta…
           </p>
         ) : null}
 
@@ -368,6 +408,10 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
           <p className="mt-4 text-sm text-destructive" role="alert">
             {error}
           </p>
+        ) : null}
+
+        {!cameraOpen && liveStatus?.startsWith("Carta encontrada") ? (
+          <p className="mt-4 text-sm font-medium text-foreground">{liveStatus}</p>
         ) : null}
 
         {previewUrl && !cameraOpen ? (
@@ -380,6 +424,66 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
             />
           </div>
         ) : null}
+
+        {/* Campo sempre visível com o texto OCR — clique para expandir */}
+        <div className="mt-4 space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-sm font-medium">Texto lido na carta</span>
+            {ocrText.length > 280 ? (
+              <button
+                type="button"
+                className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+                onClick={() => setOcrExpanded((v) => !v)}
+              >
+                {ocrExpanded ? (
+                  <>
+                    <ChevronUp className="size-3.5" />
+                    Recolher
+                  </>
+                ) : (
+                  <>
+                    <ChevronDown className="size-3.5" />
+                    Ver texto completo
+                  </>
+                )}
+              </button>
+            ) : null}
+          </div>
+          <div
+            role="button"
+            tabIndex={0}
+            onClick={() => {
+              if (ocrText.length > 280) setOcrExpanded((v) => !v);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                if (ocrText.length > 280) setOcrExpanded((v) => !v);
+              }
+            }}
+            className={`rounded-xl border border-border bg-muted/40 p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap text-foreground ${
+              ocrExpanded ? "max-h-96 overflow-auto" : "max-h-36 overflow-hidden"
+            } ${ocrText ? "cursor-pointer" : ""}`}
+          >
+            {ocrText ? (
+              ocrPreview
+            ) : phase === "looking" ? (
+              <span className="text-muted-foreground">
+                Lendo palavras da carta… aguarde alguns segundos.
+              </span>
+            ) : (
+              <span className="text-muted-foreground">
+                Ainda sem leitura. Envie uma foto ou use a câmera — o texto aparece
+                aqui.
+              </span>
+            )}
+          </div>
+          {result?.strategy ? (
+            <p className="text-[11px] text-muted-foreground">
+              Estratégia: {result.strategy}
+            </p>
+          ) : null}
+        </div>
 
         <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_1fr_auto]">
           <label className="space-y-1 text-sm">
@@ -411,16 +515,6 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
             </Button>
           </div>
         </div>
-
-        {ocrText ? (
-          <details className="mt-3 text-xs text-muted-foreground">
-            <summary className="cursor-pointer">OCR / estratégia (debug)</summary>
-            <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded-lg bg-muted/50 p-2 font-mono">
-              {result?.strategy ? `strategy: ${result.strategy}\n\n` : ""}
-              {ocrText}
-            </pre>
-          </details>
-        ) : null}
       </div>
 
       {result ? (
@@ -444,7 +538,7 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
             ) : null}
           </div>
           <p className="text-xs text-muted-foreground">
-            Marque a variante. Mostre outra carta na câmera para a próxima.
+            Marque a variante. Para outra carta, abra a câmera de novo.
           </p>
           <CardGrid
             cards={result.cards}

@@ -3,6 +3,14 @@ import type { NextConfig } from "next";
 const apiOrigin = process.env.API_INTERNAL_URL?.trim() || "http://127.0.0.1:5080";
 
 const nextConfig: NextConfig = {
+  // tesseract.js usa worker threads + wasm — não pode ser bundleado pelo Next
+  serverExternalPackages: ["tesseract.js", "tesseract.js-core", "sharp"],
+  outputFileTracingIncludes: {
+    "/api/**/*": [
+      "./node_modules/tesseract.js/**/*",
+      "./node_modules/tesseract.js-core/**/*",
+    ],
+  },
   // Acesso por IP na LAN / IP público no modo `next dev`
   allowedDevOrigins: [
     "192.168.15.11",
