@@ -3,11 +3,9 @@
 import { Camera, ImagePlus, Loader2, ScanLine, X } from "lucide-react";
 import Image from "next/image";
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
-import { createWorker, PSM, type Worker } from "tesseract.js";
 
 import { CardGrid } from "@/components/card-grid";
 import { Button } from "@/components/ui/button";
-import { parseCardCodeFromOcrAttempts } from "@/lib/card-code-parse";
 import { cardImageUrl } from "@/lib/tcgdex";
 import type { CardBrief, CollectionStatus } from "@/lib/types";
 
@@ -18,6 +16,8 @@ type LookupResult = {
   setName: string;
   tcgdexId: string;
   cards: CardBrief[];
+  strategy?: string;
+  ocrText?: string;
 };
 
 type CardScannerProps = {
@@ -25,81 +25,29 @@ type CardScannerProps = {
   onStatusChange: (card: CardBrief, status: CollectionStatus | null) => void;
 };
 
-type Band = { top: number; height: number; left: number; width: number; scale: number };
-
-function enhanceAndCrop(
-  source: CanvasImageSource,
-  srcW: number,
-  srcH: number,
-  band: Band,
-): HTMLCanvasElement {
-  const sx = Math.floor(srcW * band.left);
-  const sy = Math.floor(srcH * band.top);
-  const sw = Math.floor(srcW * band.width);
-  const sh = Math.floor(srcH * band.height);
+function captureVideoFrame(video: HTMLVideoElement): string | null {
+  if (video.videoWidth === 0) return null;
+  // Envia só a faixa inferior (onde fica o código) → OCR mais rápido/preciso
+  const fullW = video.videoWidth;
+  const fullH = video.videoHeight;
+  const sy = Math.floor(fullH * 0.55);
+  const sh = fullH - sy;
   const canvas = document.createElement("canvas");
-  canvas.width = Math.max(1, sw * band.scale);
-  canvas.height = Math.max(1, sh * band.scale);
-  const ctx = canvas.getContext("2d")!;
-  ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = "high";
-  ctx.drawImage(source, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
-
-  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  const d = imageData.data;
-  for (let i = 0; i < d.length; i += 4) {
-    const gray = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
-    // limiar suave: texto claro em fundo escuro (canto das cartas)
-    const boosted = gray > 140 ? 255 : gray < 90 ? 0 : Math.round(gray);
-    const contrast = Math.min(255, Math.max(0, (boosted - 100) * 1.8 + 110));
-    d[i] = d[i + 1] = d[i + 2] = contrast;
-  }
-  ctx.putImageData(imageData, 0, 0);
-  return canvas;
-}
-
-async function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob> {
-  const blob = await new Promise<Blob | null>((resolve) =>
-    canvas.toBlob(resolve, "image/jpeg", 0.92),
-  );
-  if (!blob) throw new Error("Falha ao preparar imagem");
-  return blob;
-}
-
-/** Várias faixas verticais: carta longe ou perto. */
-async function prepareLiveOcrImages(
-  source: CanvasImageSource,
-  width: number,
-  height: number,
-): Promise<Blob[]> {
-  const bands: Band[] = [
-    { left: 0.03, top: 0.78, width: 0.55, height: 0.16, scale: 4 },
-    { left: 0.05, top: 0.68, width: 0.55, height: 0.18, scale: 3 },
-    { left: 0.04, top: 0.58, width: 0.5, height: 0.2, scale: 3 },
-  ];
-  const blobs: Blob[] = [];
-  for (const band of bands) {
-    blobs.push(await canvasToBlob(enhanceAndCrop(source, width, height, band)));
-  }
-  return blobs;
-}
-
-async function prepareUploadOcrImages(file: Blob): Promise<Blob[]> {
-  const bitmap = await createImageBitmap(file);
-  const blobs = await prepareLiveOcrImages(bitmap, bitmap.width, bitmap.height);
-  bitmap.close();
-  return blobs;
+  canvas.width = fullW;
+  canvas.height = sh;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.drawImage(video, 0, sy, fullW, sh, 0, 0, fullW, sh);
+  return canvas.toDataURL("image/jpeg", 0.8);
 }
 
 export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const workerRef = useRef<Worker | null>(null);
-  const lastConfirmedRef = useRef<string | null>(null);
-  const streakRef = useRef<{ key: string; count: number } | null>(null);
-  const frameBusyRef = useRef(false);
-  const knownAbbrRef = useRef<Set<string>>(new Set());
+  const lastFoundRef = useRef<string | null>(null);
+  const busyRef = useRef(false);
+  const stableRef = useRef<{ hash: string; count: number } | null>(null);
 
   const [cameraOpen, setCameraOpen] = useState(false);
   const [liveStatus, setLiveStatus] = useState<string | null>(null);
@@ -107,12 +55,9 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
   const [ocrText, setOcrText] = useState("");
   const [abbr, setAbbr] = useState("");
   const [number, setNumber] = useState("");
-  const [phase, setPhase] = useState<"idle" | "reading" | "looking" | "done">(
-    "idle",
-  );
+  const [phase, setPhase] = useState<"idle" | "looking" | "done">("idle");
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<LookupResult | null>(null);
-  const [abbrReady, setAbbrReady] = useState(false);
 
   function stopCamera() {
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -120,41 +65,13 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
     if (videoRef.current) videoRef.current.srcObject = null;
     setCameraOpen(false);
     setLiveStatus(null);
-    frameBusyRef.current = false;
-    streakRef.current = null;
+    busyRef.current = false;
+    stableRef.current = null;
   }
 
   useEffect(() => {
     return () => {
       streamRef.current?.getTracks().forEach((track) => track.stop());
-      void workerRef.current?.terminate();
-      workerRef.current = null;
-    };
-  }, []);
-
-  // Carrega abreviações reais (CRI, SVI, …) para ignorar letras aleatórias
-  useEffect(() => {
-    let cancelled = false;
-    void fetch("/api/set-abbreviations")
-      .then(async (response) => {
-        if (!response.ok) throw new Error("abbr");
-        const data = (await response.json()) as { abbreviations?: string[] };
-        if (cancelled) return;
-        knownAbbrRef.current = new Set(
-          (data.abbreviations ?? []).map((a) => a.toUpperCase()),
-        );
-        setAbbrReady(true);
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setAbbrReady(false);
-          setError(
-            "Não carreguei a lista de coleções. A busca manual ainda funciona.",
-          );
-        }
-      });
-    return () => {
-      cancelled = true;
     };
   }, []);
 
@@ -169,142 +86,115 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
     });
   }, [cameraOpen]);
 
-  async function getWorker() {
-    if (workerRef.current) return workerRef.current;
-    const worker = await createWorker("eng");
-    workerRef.current = worker;
-    return worker;
-  }
-
-  async function runLookup(nextAbbr: string, nextNumber: string) {
-    setPhase("looking");
-    setError(null);
-
-    const params = new URLSearchParams({
-      abbr: nextAbbr.trim().toUpperCase(),
-      number: nextNumber.trim(),
-    });
-    const response = await fetch(`/api/lookup-card?${params.toString()}`);
-    const data = (await response.json()) as LookupResult & { error?: string };
-    if (!response.ok) {
-      throw new Error(data.error ?? "Carta não encontrada.");
-    }
+  async function applyResult(data: LookupResult) {
     setResult(data);
     setAbbr(data.abbreviation);
     setNumber(data.number);
+    setOcrText(data.ocrText ?? "");
     setPhase("done");
-    setLiveStatus(`Encontrei: ${data.cards[0]?.name ?? data.tcgdexId}`);
-    return data;
+    lastFoundRef.current = data.tcgdexId;
+    setLiveStatus(
+      `Encontrei: ${data.cards[0]?.name ?? data.tcgdexId}${
+        data.strategy ? ` (${data.strategy})` : ""
+      }`,
+    );
   }
 
-  async function recognizeBlobs(blobs: Blob[]) {
-    const worker = await getWorker();
-    const texts: string[] = [];
-    for (const blob of blobs) {
-      for (const psm of [PSM.SPARSE_TEXT, PSM.SINGLE_LINE]) {
-        await worker.setParameters({
-          tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/ ",
-          tessedit_pageseg_mode: psm,
-        });
-        const { data } = await worker.recognize(blob);
-        if (data.text?.trim()) texts.push(data.text);
-      }
+  async function scanImageBase64(imageBase64: string) {
+    const response = await fetch("/api/scan-frame", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ imageBase64 }),
+    });
+    const data = (await response.json()) as LookupResult & {
+      ok?: boolean;
+      reason?: string;
+      error?: string;
+      ocrText?: string;
+    };
+
+    if (!response.ok) {
+      throw new Error(data.error ?? "Falha no scan.");
     }
-    return texts;
+
+    setOcrText(data.ocrText ?? "");
+
+    if (!data.ok || !data.cards) {
+      return null;
+    }
+
+    return data as LookupResult;
   }
 
+  // Loop ao vivo: envia frame ao servidor (OCR + lógica inteligente)
   useEffect(() => {
     if (!cameraOpen) return;
-
     let cancelled = false;
-    lastConfirmedRef.current = null;
-    streakRef.current = null;
+    lastFoundRef.current = null;
+    stableRef.current = null;
 
-    async function scanFrame() {
-      if (cancelled || frameBusyRef.current) return;
+    async function tick() {
+      if (cancelled || busyRef.current) return;
       const video = videoRef.current;
-      if (!video || video.readyState < 2 || video.videoWidth === 0) return;
+      if (!video || video.readyState < 2) return;
 
-      frameBusyRef.current = true;
-      if (!lastConfirmedRef.current) {
-        setLiveStatus(
-          abbrReady
-            ? "Aproxime o código no guia amarelo…"
-            : "Carregando coleções…",
-        );
+      const frame = captureVideoFrame(video);
+      if (!frame) return;
+
+      // estabilidade simples: mesmo tamanho de dataURL ≈ frame parecido
+      // (melhor: hash curto)
+      const hash = `${frame.length}:${frame.slice(40, 80)}`;
+      const stable = stableRef.current;
+      if (stable?.hash === hash) stable.count += 1;
+      else stableRef.current = { hash, count: 1 };
+
+      // espera a mão parar um pouco
+      if ((stableRef.current?.count ?? 0) < 2) {
+        setLiveStatus("Segure a carta firme no guia…");
+        return;
       }
 
+      busyRef.current = true;
+      setLiveStatus("Analisando código no servidor…");
+
       try {
-        if (knownAbbrRef.current.size === 0) return;
-
-        const blobs = await prepareLiveOcrImages(
-          video,
-          video.videoWidth,
-          video.videoHeight,
-        );
-        const texts = await recognizeBlobs(blobs);
+        const found = await scanImageBase64(frame);
         if (cancelled) return;
-
-        setOcrText(texts.join("\n---\n"));
-        const parsed = parseCardCodeFromOcrAttempts(texts, knownAbbrRef.current);
-        if (!parsed) {
-          streakRef.current = null;
-          if (!lastConfirmedRef.current) {
-            setLiveStatus("Ainda sem código válido — aproxime CRI 112/086…");
-          }
+        if (!found) {
+          setLiveStatus("Ainda sem match — aproxime o canto com 112/086…");
           return;
         }
-
-        const codeKey = `${parsed.abbreviation}-${parsed.number}`;
-        setAbbr(parsed.abbreviation);
-        setNumber(parsed.number);
-
-        const streak = streakRef.current;
-        if (streak?.key === codeKey) streak.count += 1;
-        else streakRef.current = { key: codeKey, count: 1 };
-
-        const count = streakRef.current?.count ?? 1;
-        setLiveStatus(
-          `Possível ${parsed.abbreviation} ${parsed.number} (${count}/3)…`,
-        );
-
-        // Exige 3 leituras iguais seguidas para não aceitar lixo
-        if (count < 3) return;
-        if (lastConfirmedRef.current === codeKey) {
-          setLiveStatus(`Código estável: ${parsed.abbreviation} ${parsed.number}`);
+        if (lastFoundRef.current === found.tcgdexId) {
+          setLiveStatus(`Código estável: ${found.abbreviation} ${found.number}`);
           return;
         }
-
-        setLiveStatus(`Confirmado ${parsed.abbreviation} ${parsed.number} — buscando…`);
-        const data = await runLookup(parsed.abbreviation, parsed.number);
-        if (cancelled) return;
-        lastConfirmedRef.current = codeKey;
-        setLiveStatus(`Encontrei: ${data.cards[0]?.name ?? data.tcgdexId}`);
+        await applyResult(found);
       } catch (err) {
-        if (cancelled) return;
-        streakRef.current = null;
-        if (err instanceof Error) setLiveStatus(err.message);
+        if (!cancelled) {
+          setLiveStatus(
+            err instanceof Error ? err.message : "Erro ao analisar frame.",
+          );
+        }
       } finally {
-        frameBusyRef.current = false;
+        busyRef.current = false;
       }
     }
 
-    const intervalId = window.setInterval(() => {
-      void scanFrame();
-    }, 1400);
-    void scanFrame();
+    const id = window.setInterval(() => {
+      void tick();
+    }, 1800);
+    void tick();
 
     return () => {
       cancelled = true;
-      window.clearInterval(intervalId);
+      window.clearInterval(id);
     };
-  }, [cameraOpen, abbrReady]);
+  }, [cameraOpen]);
 
   async function openCamera() {
     setError(null);
     setResult(null);
-    lastConfirmedRef.current = null;
-    streakRef.current = null;
+    lastFoundRef.current = null;
 
     if (!navigator.mediaDevices?.getUserMedia) {
       setError("Este navegador não permite acessar a webcam.");
@@ -313,8 +203,6 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
 
     try {
       streamRef.current?.getTracks().forEach((track) => track.stop());
-      streamRef.current = null;
-
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: false,
         video: {
@@ -325,11 +213,11 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
       });
       streamRef.current = stream;
       setCameraOpen(true);
-      setLiveStatus("Aproxime o código no guia amarelo…");
+      setLiveStatus("Aponte o código para o guia amarelo…");
       setPhase("idle");
     } catch {
       setError(
-        "Não consegui abrir a webcam. Permita o acesso à câmera no navegador e tente de novo.",
+        "Não consegui abrir a webcam. Permita o acesso à câmera e tente de novo.",
       );
       setCameraOpen(false);
     }
@@ -339,43 +227,26 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
     stopCamera();
     setError(null);
     setResult(null);
-    setOcrText("");
-    setAbbr("");
-    setNumber("");
-    setPhase("reading");
-    lastConfirmedRef.current = null;
-
+    setPhase("looking");
     if (previewUrl) URL.revokeObjectURL(previewUrl);
     setPreviewUrl(URL.createObjectURL(file));
 
     try {
-      if (knownAbbrRef.current.size === 0) {
-        const response = await fetch("/api/set-abbreviations");
-        if (response.ok) {
-          const data = (await response.json()) as { abbreviations?: string[] };
-          knownAbbrRef.current = new Set(
-            (data.abbreviations ?? []).map((a) => a.toUpperCase()),
-          );
-        }
-      }
-
-      const crops = await prepareUploadOcrImages(file);
-      const texts = await recognizeBlobs(crops);
-      setOcrText(texts.join("\n---\n"));
-      const parsed = parseCardCodeFromOcrAttempts(
-        texts,
-        knownAbbrRef.current.size > 0 ? knownAbbrRef.current : undefined,
-      );
-      if (!parsed) {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(new Error("Falha ao ler arquivo"));
+        reader.readAsDataURL(file);
+      });
+      const found = await scanImageBase64(dataUrl);
+      if (!found) {
         setPhase("idle");
         setError(
-          "Não li um código válido. Aproxime o canto (ex.: CRI PT 112/086) ou digite manualmente.",
+          "Não identifiquei a carta. Tente foto mais perto do código (ex.: CRI PT 112/086).",
         );
         return;
       }
-      setAbbr(parsed.abbreviation);
-      setNumber(parsed.number);
-      await runLookup(parsed.abbreviation, parsed.number);
+      await applyResult(found);
     } catch (err) {
       setPhase("idle");
       setError(err instanceof Error ? err.message : "Falha ao ler a imagem.");
@@ -388,7 +259,23 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
     if (file) void processFile(file);
   }
 
-  const busy = phase === "reading" || phase === "looking";
+  async function manualLookup() {
+    setPhase("looking");
+    setError(null);
+    try {
+      const params = new URLSearchParams({
+        abbr: abbr.trim().toUpperCase(),
+        number: number.trim(),
+      });
+      const response = await fetch(`/api/lookup-card?${params.toString()}`);
+      const data = (await response.json()) as LookupResult & { error?: string };
+      if (!response.ok) throw new Error(data.error ?? "Não encontrada.");
+      await applyResult(data);
+    } catch (err) {
+      setPhase("idle");
+      setError(err instanceof Error ? err.message : "Falha na busca.");
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -400,18 +287,16 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
           <div className="space-y-1">
             <h2 className="font-heading text-lg font-semibold">Escanear carta</h2>
             <p className="text-sm text-muted-foreground">
-              Encha o guia amarelo com o código (bem de perto). Só aceitamos
-              abreviações reais de coleção — ignora letras aleatórias.
+              Lógica nova: lê primeiro o{" "}
+              <span className="font-mono text-foreground">112/086</span>, cruza
+              com o tamanho do set e confirma a abreviação com margem de erro.
+              OCR roda no servidor (melhor que no celular/PC).
             </p>
           </div>
         </div>
 
         <div className="mt-4 flex flex-wrap gap-2">
-          <Button
-            type="button"
-            onClick={() => void openCamera()}
-            disabled={busy && !cameraOpen}
-          >
+          <Button type="button" onClick={() => void openCamera()}>
             <Camera className="size-4" />
             {cameraOpen ? "Reiniciar câmera" : "Usar câmera"}
           </Button>
@@ -419,7 +304,7 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
             type="button"
             variant="outline"
             onClick={() => fileInputRef.current?.click()}
-            disabled={busy}
+            disabled={phase === "looking"}
           >
             <ImagePlus className="size-4" />
             Enviar foto
@@ -443,9 +328,9 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
                 muted
                 className="max-h-80 w-full object-contain"
               />
-              <div className="pointer-events-none absolute inset-x-[8%] bottom-[6%] h-[20%] rounded-md border-2 border-dashed border-yellow-300/90 bg-yellow-300/10" />
+              <div className="pointer-events-none absolute inset-x-[8%] bottom-[6%] h-[22%] rounded-md border-2 border-dashed border-yellow-300/90 bg-yellow-300/10" />
               <p className="pointer-events-none absolute bottom-[8%] left-[10%] text-xs font-medium text-yellow-100 drop-shadow">
-                Código aqui · precisa confirmar 3×
+                Código no guia · segure firme
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -470,12 +355,10 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
           </div>
         ) : null}
 
-        {!cameraOpen && busy ? (
+        {phase === "looking" && !cameraOpen ? (
           <p className="mt-4 flex items-center gap-2 text-sm text-muted-foreground">
             <Loader2 className="size-4 animate-spin" />
-            {phase === "reading"
-              ? "Lendo o código na imagem…"
-              : "Buscando a carta na coleção…"}
+            Analisando…
           </p>
         ) : null}
 
@@ -490,7 +373,7 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={previewUrl}
-              alt="Prévia da foto"
+              alt="Prévia"
               className="max-h-56 w-full object-contain"
             />
           </div>
@@ -520,14 +403,7 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
               type="button"
               className="w-full sm:w-auto"
               disabled={!abbr.trim() || !number.trim() || phase === "looking"}
-              onClick={() => {
-                void runLookup(abbr, number).catch((err: unknown) => {
-                  setPhase("idle");
-                  setError(
-                    err instanceof Error ? err.message : "Falha na busca.",
-                  );
-                });
-              }}
+              onClick={() => void manualLookup()}
             >
               Buscar
             </Button>
@@ -536,8 +412,9 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
 
         {ocrText ? (
           <details className="mt-3 text-xs text-muted-foreground">
-            <summary className="cursor-pointer">Texto bruto do OCR (debug)</summary>
+            <summary className="cursor-pointer">OCR / estratégia (debug)</summary>
             <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded-lg bg-muted/50 p-2 font-mono">
+              {result?.strategy ? `strategy: ${result.strategy}\n\n` : ""}
               {ocrText}
             </pre>
           </details>
@@ -565,8 +442,7 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
             ) : null}
           </div>
           <p className="text-xs text-muted-foreground">
-            Marque a variante. Com a câmera aberta, mostre outra carta para a
-            próxima.
+            Marque a variante. Mostre outra carta na câmera para a próxima.
           </p>
           <CardGrid
             cards={result.cards}

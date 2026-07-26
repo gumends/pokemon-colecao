@@ -27,7 +27,29 @@ function scannedIds() {
   return globalThis.__setAbbrScanned;
 }
 
-/** Varre sets (recentes primeiro) até achar a abreviação ou esgotar. */
+async function ingestSetDetail(setId: string, fallbackOfficial: number) {
+  const map = getAbbrMap();
+  const response = await fetch(`${TCGDEX_EN}/sets/${encodeURIComponent(setId)}`, {
+    next: { revalidate: 86400 },
+  });
+  if (!response.ok) return null;
+  const data = (await response.json()) as {
+    id: string;
+    name: string;
+    abbreviation?: { official?: string };
+    cardCount?: { official?: number };
+  };
+  const abbr = data.abbreviation?.official?.toUpperCase();
+  if (!abbr) return null;
+  const info: SetAbbrInfo = {
+    setId: data.id,
+    setName: data.name,
+    officialCount: data.cardCount?.official ?? fallbackOfficial,
+  };
+  if (!map.has(abbr)) map.set(abbr, info);
+  return { abbr, info };
+}
+
 export async function resolveSetByAbbreviation(
   abbreviation: string,
 ): Promise<SetAbbrInfo | null> {
@@ -41,29 +63,9 @@ export async function resolveSetByAbbreviation(
   for (const set of sets) {
     if (scanned.has(set.id)) continue;
     scanned.add(set.id);
-
     try {
-      const response = await fetch(
-        `${TCGDEX_EN}/sets/${encodeURIComponent(set.id)}`,
-        { next: { revalidate: 86400 } },
-      );
-      if (!response.ok) continue;
-      const data = (await response.json()) as {
-        id: string;
-        name: string;
-        abbreviation?: { official?: string };
-        cardCount?: { official?: number };
-      };
-      const abbr = data.abbreviation?.official?.toUpperCase();
-      if (!abbr) continue;
-
-      const info: SetAbbrInfo = {
-        setId: data.id,
-        setName: data.name,
-        officialCount: data.cardCount?.official ?? set.cardCount.official,
-      };
-      if (!map.has(abbr)) map.set(abbr, info);
-      if (abbr === abbreviation) return info;
+      const row = await ingestSetDetail(set.id, set.cardCount.official);
+      if (row?.abbr === abbreviation) return row.info;
     } catch {
       // continua
     }
@@ -72,45 +74,35 @@ export async function resolveSetByAbbreviation(
   return map.get(abbreviation) ?? null;
 }
 
-/** Pré-aquece abreviações dos N sets mais recentes (para validar OCR). */
-export async function warmAbbreviationMap(limit = 60): Promise<string[]> {
+export async function warmAbbreviationMap(limit = 50): Promise<string[]> {
   const sets = await listSets();
   const scanned = scannedIds();
-  const map = getAbbrMap();
   let processed = 0;
 
   for (const set of sets) {
     if (processed >= limit) break;
-    if (scanned.has(set.id)) {
-      processed += 1;
-      continue;
-    }
-    scanned.add(set.id);
     processed += 1;
-
+    if (scanned.has(set.id)) continue;
+    scanned.add(set.id);
     try {
-      const response = await fetch(
-        `${TCGDEX_EN}/sets/${encodeURIComponent(set.id)}`,
-        { next: { revalidate: 86400 } },
-      );
-      if (!response.ok) continue;
-      const data = (await response.json()) as {
-        id: string;
-        name: string;
-        abbreviation?: { official?: string };
-        cardCount?: { official?: number };
-      };
-      const abbr = data.abbreviation?.official?.toUpperCase();
-      if (!abbr || map.has(abbr)) continue;
-      map.set(abbr, {
-        setId: data.id,
-        setName: data.name,
-        officialCount: data.cardCount?.official ?? set.cardCount.official,
-      });
+      await ingestSetDetail(set.id, set.cardCount.official);
     } catch {
       // continua
     }
   }
 
-  return [...map.keys()].sort();
+  return [...getAbbrMap().keys()].sort();
+}
+
+/** Índice officialCount → sets (secret rare usa o total impresso, ex. 086). */
+export function getSetsByOfficialCount(count: number): SetAbbrInfo[] {
+  const out: SetAbbrInfo[] = [];
+  const seen = new Set<string>();
+  for (const info of getAbbrMap().values()) {
+    if (info.officialCount !== count) continue;
+    if (seen.has(info.setId)) continue;
+    seen.add(info.setId);
+    out.push(info);
+  }
+  return out;
 }

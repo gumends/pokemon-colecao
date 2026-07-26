@@ -1,10 +1,6 @@
 import { NextResponse } from "next/server";
 
-import {
-  expandCardToVariantEntries,
-  getCard,
-} from "@/lib/tcgdex";
-import { resolveSetByAbbreviation } from "@/lib/set-abbreviations";
+import { resolveExact } from "@/lib/smart-card-lookup";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -22,32 +18,19 @@ export async function GET(request: Request) {
       );
     }
 
-    const number = numberRaw.replace(/\D/g, "").padStart(3, "0");
-    const setInfo = await resolveSetByAbbreviation(abbreviation);
-
-    if (!setInfo) {
+    const result = await resolveExact(abbreviation, numberRaw);
+    if (!result) {
       return NextResponse.json(
         {
-          error: `Abreviação “${abbreviation}” não encontrada. Funciona melhor em coleções modernas (código de 3 letras, ex.: CRI).`,
+          error: `Não achei “${abbreviation} ${numberRaw}”.`,
           abbreviation,
-          number,
+          number: numberRaw.replace(/\D/g, "").padStart(3, "0"),
         },
         { status: 404 },
       );
     }
 
-    const tcgdexId = `${setInfo.setId}-${number}`;
-    const detail = await getCard(tcgdexId);
-    const cards = expandCardToVariantEntries(detail, setInfo.officialCount);
-
-    return NextResponse.json({
-      abbreviation,
-      number,
-      setId: setInfo.setId,
-      setName: setInfo.setName,
-      tcgdexId,
-      cards,
-    });
+    return NextResponse.json(result);
   } catch (error) {
     console.error(error);
     return NextResponse.json(
