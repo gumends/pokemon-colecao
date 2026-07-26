@@ -6,6 +6,10 @@ import {
   warmAbbreviationMap,
   type SetAbbrInfo,
 } from "@/lib/set-abbreviations";
+import {
+  extractTightLetterWords,
+  extractTightNumberPairs,
+} from "@/lib/tight-ocr-tokens";
 import type { CardBrief } from "@/lib/types";
 
 export type SmartLookupResult = {
@@ -19,8 +23,6 @@ export type SmartLookupResult = {
   strategy: string;
   ocrText?: string;
 };
-
-const LANG = new Set(["PT", "EN", "ES", "DE", "FR", "IT", "JP", "KO"]);
 
 /** Normaliza confusões comuns de OCR em letras de set. */
 export function normalizeAbbrToken(token: string): string {
@@ -54,37 +56,28 @@ function levenshtein(a: string, b: string): number {
   return dp[m][n];
 }
 
-/** Acha a abreviação conhecida mais parecida com tokens do OCR. */
+/**
+ * Fuzzy só em palavras de 3 letras coladas (nunca letras soltas).
+ * Ex.: CR1 ≈ CRI.
+ */
 export function fuzzyMatchAbbreviation(
   text: string,
   known: string[],
 ): { abbr: string; distance: number } | null {
-  const normalized = text.toUpperCase().replace(/[^\w\s/]/g, " ");
-  const tokens = normalized
-    .split(/\s+/)
-    .flatMap((t) => {
-      const cleaned = t.replace(/[^A-Z0-9]/g, "");
-      if (!cleaned) return [];
-      // CRIPT → CRI + PT
-      const m = /^(?:([A-Z0-9]{3})(PT|EN|ES|DE|FR|IT|JP|KO))$/.exec(cleaned);
-      if (m) return [m[1], m[2]];
-      return [cleaned];
-    })
-    .filter((t) => t.length >= 2 && t.length <= 4 && !LANG.has(t));
+  const tokens = extractTightLetterWords(text);
+  if (tokens.length === 0) return null;
 
   let best: { abbr: string; distance: number } | null = null;
   for (const token of tokens) {
     const norm = normalizeAbbrToken(token);
     for (const abbr of known) {
-      if (abbr.length < 2) continue;
-      // compara tamanhos próximos
+      if (abbr.length !== 3) continue;
       if (Math.abs(abbr.length - norm.length) > 1) continue;
       const distance = Math.min(
         levenshtein(norm, abbr),
         levenshtein(token.toUpperCase(), abbr),
       );
-      const maxDist = abbr.length <= 3 ? 1 : 2;
-      if (distance > maxDist) continue;
+      if (distance > 1) continue;
       if (!best || distance < best.distance) {
         best = { abbr, distance };
       }
@@ -94,36 +87,14 @@ export function fuzzyMatchAbbreviation(
   return best;
 }
 
+/** @deprecated use extractTightNumberPairs — mantido p/ imports antigos */
 export function extractNumberTotalPairs(
   text: string,
 ): Array<{ number: string; total: string }> {
-  const normalized = text
-    .toUpperCase()
-    .replace(/[|\\]/g, "/")
-    .replace(/\bO(?=\d)/g, "0")
-    .replace(/(?<=\d)O\b/g, "0")
-    .replace(/\bO(\d{2,3})\b/g, "0$1");
-
-  const pairs: Array<{ number: string; total: string }> = [];
-  const re = /(\d{1,3})\s*\/\s*(\d{1,3})/g;
-  for (const match of normalized.matchAll(re)) {
-    const number = match[1].replace(/\D/g, "").padStart(3, "0");
-    const total = match[2].replace(/\D/g, "").padStart(3, "0");
-    const n = Number(number);
-    const t = Number(total);
-    if (n < 1 || n > 400 || t < 1 || t > 400) continue;
-    pairs.push({ number, total });
-  }
-
-  // 112 e 086 em linhas separadas
-  if (pairs.length === 0) {
-    const nums = [...normalized.matchAll(/\b(\d{3})\b/g)].map((m) => m[1]);
-    if (nums.length >= 2) {
-      pairs.push({ number: nums[0], total: nums[1] });
-    }
-  }
-
-  return pairs;
+  return extractTightNumberPairs(text).map(({ number, total }) => ({
+    number,
+    total,
+  }));
 }
 
 async function tryLoadCard(
@@ -155,26 +126,31 @@ async function tryLoadCard(
 }
 
 /**
- * Estratégia inteligente:
- * 1) achar XXX/YYY no texto (números são mais estáveis no OCR)
- * 2) filtrar sets com officialCount == YYY
- * 3) fuzzy na abreviação (CRI ≈ CR1/ORI)
- * 4) testar se a carta existe na TCGdex
+ * Estratégia “tokens colados”:
+ * 1) só aceita NNN/NNN sem espaço (ex.: 112/086)
+ * 2) só usa palavras de 3 letras juntas (ex.: CRI)
+ * 3) filtra sets pelo total + fuzzy na abreviação
+ * 4) confirma que a carta existe na TCGdex
+ *
+ * Sem NNN/NNN colado → não resolve (espera frame melhor).
  */
 export async function smartResolveFromOcrText(
   ocrText: string,
 ): Promise<SmartLookupResult | null> {
+  const pairs = extractTightNumberPairs(ocrText);
+  if (pairs.length === 0) return null;
+
   await warmAbbreviationMap(50);
   const map = getAbbrMap();
   const known = [...map.keys()];
-  const pairs = extractNumberTotalPairs(ocrText);
   const fuzzy = fuzzyMatchAbbreviation(ocrText, known);
+  const letterWords = extractTightLetterWords(ocrText);
 
-  // 1) número/total + set pelo total oficial
   for (const pair of pairs) {
     const totalNum = Number(pair.total);
     const setsForTotal = getSetsByOfficialCount(totalNum);
 
+    // 1) palavra de 3 letras + fuzzy contra sets conhecidos
     if (fuzzy) {
       const info = map.get(fuzzy.abbr);
       if (info) {
@@ -183,15 +159,30 @@ export async function smartResolveFromOcrText(
           pair.number,
           fuzzy.abbr,
           pair.total,
-          `total+fuzzy-abbr(${fuzzy.distance})`,
+          `tight-total+fuzzy-abbr(${fuzzy.distance})`,
           ocrText,
         );
         if (hit) return hit;
       }
     }
 
+    // 2) match exato de palavra de 3 letras no mapa
+    for (const word of letterWords) {
+      const info = map.get(word) ?? map.get(normalizeAbbrToken(word));
+      if (!info) continue;
+      const hit = await tryLoadCard(
+        info,
+        pair.number,
+        word,
+        pair.total,
+        "tight-total+exact-abbr",
+        ocrText,
+      );
+      if (hit) return hit;
+    }
+
+    // 3) só o total oficial (NNN/NNN) — última tentativa
     for (const info of setsForTotal) {
-      // descobre abbr desse set
       let abbr = [...map.entries()].find(([, v]) => v.setId === info.setId)?.[0];
       abbr = abbr ?? info.setId.toUpperCase().slice(0, 3);
       const hit = await tryLoadCard(
@@ -199,33 +190,10 @@ export async function smartResolveFromOcrText(
         pair.number,
         abbr,
         pair.total,
-        "total-only",
+        "tight-total-only",
         ocrText,
       );
       if (hit) return hit;
-    }
-  }
-
-  // 2) só fuzzy abbr + primeiro número de 3 dígitos
-  if (fuzzy) {
-    const info =
-      map.get(fuzzy.abbr) ?? (await resolveSetByAbbreviation(fuzzy.abbr));
-    if (info) {
-      const numberMatch = /\b(\d{1,3})\b/.exec(
-        ocrText.replace(/\bO(\d{2,3})\b/g, "0$1"),
-      );
-      if (numberMatch) {
-        const number = numberMatch[1].padStart(3, "0");
-        const hit = await tryLoadCard(
-          info,
-          number,
-          fuzzy.abbr,
-          undefined,
-          `abbr-only(${fuzzy.distance})`,
-          ocrText,
-        );
-        if (hit) return hit;
-      }
     }
   }
 

@@ -1,25 +1,30 @@
-/** Extrai abreviação do set + número impresso no canto da carta. */
+/**
+ * Extrai abreviação do set + número impresso no canto da carta.
+ * Só aceita tokens colados: 3 letras juntas + NNN/NNN sem espaço na barra.
+ */
+
+import {
+  extractTightLetterWords,
+  extractTightNumberPairs,
+} from "@/lib/tight-ocr-tokens";
 
 export type ParsedCardCode = {
   abbreviation: string;
   number: string;
   total?: string;
   rawMatch: string;
-  /** Maior = mais confiável (precisa de barra e set conhecido). */
+  /** Maior = mais confiável. */
   score: number;
 };
 
 const LANG_MARKERS = new Set(["PT", "EN", "ES", "DE", "FR", "IT", "JP", "KO"]);
 
-/** Normaliza ruído típico de OCR em fotos de carta. */
+/** Normaliza ruído típico de OCR — não cola tokens separados. */
 export function normalizeOcrText(text: string): string {
   return text
     .toUpperCase()
     .replace(/[|\\]/g, "/")
     .replace(/[^\w\s/]/g, " ")
-    .replace(/\bO(?=\d)/g, "0")
-    .replace(/(?<=\d)O\b/g, "0")
-    .replace(/\bO(\d{2,3})\b/g, "0$1")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -29,71 +34,36 @@ function pushCandidate(
   candidate: Omit<ParsedCardCode, "score"> & { score: number },
 ) {
   if (LANG_MARKERS.has(candidate.abbreviation)) return;
-  if (!/^[A-Z]{2,4}$/.test(candidate.abbreviation)) return;
+  if (!/^[A-Z0-9]{3}$/.test(candidate.abbreviation)) return;
+  if (!/[A-Z]/.test(candidate.abbreviation)) return;
   const num = Number(candidate.number);
   if (!Number.isFinite(num) || num < 1 || num > 400) return;
   list.push(candidate);
 }
 
-/** Coleta candidatos ranqueados a partir de um texto OCR. */
+/**
+ * Só candidatos com:
+ * - NNN/NNN colado (sem espaço)
+ * - palavra de exatamente 3 letras juntas
+ */
 export function collectCardCodeCandidates(text: string): ParsedCardCode[] {
-  const normalized = normalizeOcrText(text);
-  if (!normalized) return [];
+  const pairs = extractTightNumberPairs(text);
+  const abbrs = extractTightLetterWords(text);
+  if (pairs.length === 0 || abbrs.length === 0) return [];
+
   const found: ParsedCardCode[] = [];
-
-  const withLang =
-    /\b([A-Z]{3})\s+(?:PT|EN|ES|DE|FR|IT|JP|KO)\s+(\d{1,3})\s*\/\s*(\d{1,3})\b/g;
-  for (const match of normalized.matchAll(withLang)) {
-    pushCandidate(found, {
-      abbreviation: match[1],
-      number: match[2].padStart(3, "0"),
-      total: match[3].padStart(3, "0"),
-      rawMatch: match[0],
-      score: 100,
-    });
-  }
-
-  const gluedLang =
-    /\b([A-Z]{3})(?:PT|EN|ES|DE|FR|IT|JP|KO)\s*(\d{1,3})\s*\/\s*(\d{1,3})\b/g;
-  for (const match of normalized.matchAll(gluedLang)) {
-    pushCandidate(found, {
-      abbreviation: match[1],
-      number: match[2].padStart(3, "0"),
-      total: match[3].padStart(3, "0"),
-      rawMatch: match[0],
-      score: 95,
-    });
-  }
-
-  const withTotal = /\b([A-Z]{3})\s+(\d{1,3})\s*\/\s*(\d{1,3})\b/g;
-  for (const match of normalized.matchAll(withTotal)) {
-    pushCandidate(found, {
-      abbreviation: match[1],
-      number: match[2].padStart(3, "0"),
-      total: match[3].padStart(3, "0"),
-      rawMatch: match[0],
-      score: 90,
-    });
-  }
-
-  // Só número XXX/YYY + abreviação de 3 letras no mesmo texto
-  const numOnly = /(\d{1,3})\s*\/\s*(\d{1,3})/.exec(normalized);
-  if (numOnly) {
-    const abbrs = [...normalized.matchAll(/\b([A-Z]{3})\b/g)]
-      .map((m) => m[1])
-      .filter((a) => !LANG_MARKERS.has(a));
+  for (const pair of pairs) {
     for (const abbreviation of abbrs) {
       pushCandidate(found, {
         abbreviation,
-        number: numOnly[1].padStart(3, "0"),
-        total: numOnly[2].padStart(3, "0"),
-        rawMatch: `${abbreviation} ${numOnly[0]}`,
-        score: 70,
+        number: pair.number,
+        total: pair.total,
+        rawMatch: `${abbreviation} ${pair.raw}`,
+        score: 100,
       });
     }
   }
 
-  // Dedup por abbr+number, mantém maior score
   const best = new Map<string, ParsedCardCode>();
   for (const item of found) {
     const key = `${item.abbreviation}-${item.number}`;
@@ -126,11 +96,10 @@ export function parseCardCodeFromOcrAttempts(
 
   const filtered = known
     ? all.filter((c) => known.has(c.abbreviation))
-    : all.filter((c) => c.score >= 90); // sem whitelist, exige padrão forte com /
+    : all;
 
   if (filtered.length === 0) return null;
 
-  // Preferir candidatos que aparecem mais vezes + maior score
   const ranked = new Map<string, { item: ParsedCardCode; hits: number }>();
   for (const item of filtered) {
     const key = `${item.abbreviation}-${item.number}`;

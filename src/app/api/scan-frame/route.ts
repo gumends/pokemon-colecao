@@ -3,6 +3,7 @@ import sharp from "sharp";
 import { createWorker, PSM, type Worker } from "tesseract.js";
 
 import { smartResolveFromOcrText } from "@/lib/smart-card-lookup";
+import { hasUsableTightTokens } from "@/lib/tight-ocr-tokens";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -111,12 +112,15 @@ export async function POST(request: Request) {
         const text = await ocrBuffer(variant);
         if (!text.trim()) continue;
         texts.push(text);
-        const partial = await smartResolveFromOcrText(texts.join("\n"));
+        // Só tenta resolver quando já há NNN/NNN colado (sem espaço)
+        const joined = texts.join("\n");
+        if (!hasUsableTightTokens(joined)) continue;
+        const partial = await smartResolveFromOcrText(joined);
         if (partial) {
           return NextResponse.json({
             ok: true,
             ...partial,
-            ocrText: texts.join("\n"),
+            ocrText: joined,
           });
         }
       } catch {

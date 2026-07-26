@@ -161,7 +161,9 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
         const found = await scanImageBase64(frame);
         if (cancelled) return;
         if (!found) {
-          setLiveStatus("Ainda sem match — aproxime o canto com 112/086…");
+          setLiveStatus(
+            "Sem tokens colados ainda — preciso de CRI + 112/086 juntos…",
+          );
           return;
         }
         if (lastFoundRef.current === found.tcgdexId) {
@@ -287,10 +289,10 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
           <div className="space-y-1">
             <h2 className="font-heading text-lg font-semibold">Escanear carta</h2>
             <p className="text-sm text-muted-foreground">
-              Lógica nova: lê primeiro o{" "}
-              <span className="font-mono text-foreground">112/086</span>, cruza
-              com o tamanho do set e confirma a abreviação com margem de erro.
-              OCR roda no servidor (melhor que no celular/PC).
+              Só lê tokens colados:{" "}
+              <span className="font-mono text-foreground">CRI</span> e{" "}
+              <span className="font-mono text-foreground">112/086</span> (barra
+              sem espaço). Letras soltas e números separados são ignorados.
             </p>
           </div>
         </div>
