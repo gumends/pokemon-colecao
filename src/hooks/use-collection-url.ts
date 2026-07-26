@@ -3,14 +3,15 @@
 import { useCallback, useMemo } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 
-export type AppTab = "sets" | "owned" | "wanted" | "friend";
+export type AppTab = "sets" | "owned" | "wanted" | "friend" | "scan";
 
 function isAppTab(value: string | null): value is AppTab {
   return (
     value === "sets" ||
     value === "owned" ||
     value === "wanted" ||
-    value === "friend"
+    value === "friend" ||
+    value === "scan"
   );
 }
 

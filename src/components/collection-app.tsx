@@ -3,6 +3,7 @@
 import { Suspense, useCallback, useMemo, useState, type ReactNode } from "react";
 
 import { CardGrid } from "@/components/card-grid";
+import { CardScanner } from "@/components/card-scanner";
 import { FriendPanel } from "@/components/friend-panel";
 import { LoadingState } from "@/components/loading-state";
 import { SearchBar } from "@/components/search-bar";
@@ -153,9 +154,11 @@ function CollectionAppContent() {
         ? "Buscar nas cartas que faltam…"
         : tab === "friend"
           ? "Buscar nas cartas do amigo…"
-          : setId
-            ? "Buscar carta nesta coleção…"
-            : "Buscar coleção…";
+          : tab === "scan"
+            ? "Busca não usada no scanner…"
+            : setId
+              ? "Buscar carta nesta coleção…"
+              : "Buscar coleção…";
 
   const setBrowser = (
     <SetBrowser
@@ -172,113 +175,131 @@ function CollectionAppContent() {
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6 px-4 py-8 sm:px-6">
-      {setId ? (
-        <StatCards
-          owned={ownedCards.length}
-          missing={setCards ? missingCards.length : null}
-        />
-      ) : null}
+      <div className="inline-flex max-w-full flex-wrap gap-1 rounded-lg bg-muted p-1">
+        <TabButton
+          active={tab !== "scan"}
+          onClick={() => setTab("sets")}
+        >
+          Coleções
+        </TabButton>
+        <TabButton active={tab === "scan"} onClick={() => setTab("scan")}>
+          Escanear
+        </TabButton>
+      </div>
 
-      {isCollectionLoading ? (
-        <p className="text-sm text-muted-foreground">Carregando coleção…</p>
-      ) : null}
-      {collectionError ? (
-        <p className="text-sm text-destructive" role="alert">
-          {collectionError}
-        </p>
-      ) : null}
-
-      <SearchBar
-        value={query}
-        onValueChange={setQuery}
-        placeholder={searchPlaceholder}
-      />
-
-      {!setId ? (
-        setBrowser
+      {tab === "scan" ? (
+        <CardScanner getStatus={getStatus} onStatusChange={updateStatus} />
       ) : (
-        <div className="space-y-4">
-          <div className="inline-flex max-w-full flex-wrap gap-1 rounded-lg bg-muted p-1">
-            <TabButton active={tab === "sets"} onClick={() => setTab("sets")}>
-              Todas
-            </TabButton>
-            <TabButton
-              active={tab === "owned"}
-              onClick={() => setTab("owned")}
-            >
-              Tenho ({ownedCards.length})
-            </TabButton>
-            <TabButton
-              active={tab === "wanted"}
-              onClick={() => setTab("wanted")}
-            >
-              Faltam ({setCards ? missingCards.length : "—"})
-            </TabButton>
-            <TabButton
-              active={tab === "friend"}
-              onClick={() => setTab("friend")}
-            >
-              Amigo
-            </TabButton>
-          </div>
-
-          {tab === "sets" ? setBrowser : null}
-
-          {tab === "owned" ? (
-            <div className="space-y-4">
-              <TypeFilter
-                types={ownedTypes}
-                selected={typeFilter}
-                onSelect={setTypeFilter}
-              />
-              <CardGrid
-                cards={filteredOwned}
-                getStatus={getStatus}
-                onStatusChange={updateStatus}
-                emptyMessage={
-                  query || typeFilter
-                    ? "Nenhuma carta encontrada em “Tenho”."
-                    : "Nenhuma carta desta coleção marcada como “Tenho”."
-                }
-              />
-            </div>
+        <>
+          {setId ? (
+            <StatCards
+              owned={ownedCards.length}
+              missing={setCards ? missingCards.length : null}
+            />
           ) : null}
 
-          {tab === "wanted" ? (
+          {isCollectionLoading ? (
+            <p className="text-sm text-muted-foreground">Carregando coleção…</p>
+          ) : null}
+          {collectionError ? (
+            <p className="text-sm text-destructive" role="alert">
+              {collectionError}
+            </p>
+          ) : null}
+
+          <SearchBar
+            value={query}
+            onValueChange={setQuery}
+            placeholder={searchPlaceholder}
+          />
+
+          {!setId ? (
+            setBrowser
+          ) : (
             <div className="space-y-4">
-              {setId && !setCards ? (
-                <LoadingState message="Calculando as cartas que faltam…" />
-              ) : (
-                <>
+              <div className="inline-flex max-w-full flex-wrap gap-1 rounded-lg bg-muted p-1">
+                <TabButton active={tab === "sets"} onClick={() => setTab("sets")}>
+                  Todas
+                </TabButton>
+                <TabButton
+                  active={tab === "owned"}
+                  onClick={() => setTab("owned")}
+                >
+                  Tenho ({ownedCards.length})
+                </TabButton>
+                <TabButton
+                  active={tab === "wanted"}
+                  onClick={() => setTab("wanted")}
+                >
+                  Faltam ({setCards ? missingCards.length : "—"})
+                </TabButton>
+                <TabButton
+                  active={tab === "friend"}
+                  onClick={() => setTab("friend")}
+                >
+                  Amigo
+                </TabButton>
+              </div>
+
+              {tab === "sets" ? setBrowser : null}
+
+              {tab === "owned" ? (
+                <div className="space-y-4">
                   <TypeFilter
-                    types={missingTypes}
+                    types={ownedTypes}
                     selected={typeFilter}
                     onSelect={setTypeFilter}
                   />
                   <CardGrid
-                    cards={filteredMissing}
+                    cards={filteredOwned}
                     getStatus={getStatus}
                     onStatusChange={updateStatus}
                     emptyMessage={
                       query || typeFilter
-                        ? "Nenhuma carta encontrada em “Faltam”."
-                        : "Você já tem todas as cartas desta coleção."
+                        ? "Nenhuma carta encontrada em “Tenho”."
+                        : "Nenhuma carta desta coleção marcada como “Tenho”."
                     }
                   />
-                </>
-              )}
-            </div>
-          ) : null}
+                </div>
+              ) : null}
 
-          {tab === "friend" ? (
-            <FriendPanel
-              setCards={setCards}
-              initialCode={friendCode}
-              onCodeCommit={setFriendCode}
-              query={query}
-            />
-          ) : null}
-        </div>
+              {tab === "wanted" ? (
+                <div className="space-y-4">
+                  {setId && !setCards ? (
+                    <LoadingState message="Calculando as cartas que faltam…" />
+                  ) : (
+                    <>
+                      <TypeFilter
+                        types={missingTypes}
+                        selected={typeFilter}
+                        onSelect={setTypeFilter}
+                      />
+                      <CardGrid
+                        cards={filteredMissing}
+                        getStatus={getStatus}
+                        onStatusChange={updateStatus}
+                        emptyMessage={
+                          query || typeFilter
+                            ? "Nenhuma carta encontrada em “Faltam”."
+                            : "Você já tem todas as cartas desta coleção."
+                        }
+                      />
+                    </>
+                  )}
+                </div>
+              ) : null}
+
+              {tab === "friend" ? (
+                <FriendPanel
+                  setCards={setCards}
+                  initialCode={friendCode}
+                  onCodeCommit={setFriendCode}
+                  query={query}
+                />
+              ) : null}
+            </div>
+          )}
+        </>
       )}
     </div>
   );
