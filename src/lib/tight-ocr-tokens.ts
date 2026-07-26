@@ -1,7 +1,8 @@
 /**
  * Estratégia de tokens “colados”:
  * - Letras: só palavras de exatamente 3 chars juntas (ex.: CRI / CR1), sem letras soltas.
- * - Números: só padrão NNN/NNN colado, sem espaço em volta da barra (ex.: 112/086).
+ * - Números: só padrão NNN/NNN colado (ex.: 112/086).
+ *   OCR costuma ler "/" como "7" → também aceita NNN7NNN colado (1127086).
  */
 
 const LANG = new Set(["PT", "EN", "ES", "DE", "FR", "IT", "JP", "KO"]);
@@ -26,6 +27,14 @@ function prepareOcr(text: string): string {
     .replace(/[^\w\s/]/g, " ");
 }
 
+/**
+ * Normaliza barra: "/" real, ou "7" no meio de dígitos colados (1127086 → 112/086).
+ * Não remove espaços — "112 / 086" continua inválido.
+ */
+function normalizeSlashes(text: string): string {
+  return text.replace(/([0-9O]{3})7([0-9O]{3})/g, "$1/$2");
+}
+
 function toDigits(chunk: string): string {
   return chunk.replace(/O/g, "0");
 }
@@ -48,23 +57,32 @@ function pushPair(
 
 /** Só NNN/NNN sem espaço em volta da barra (também se colado em CRI/CRIPT). */
 export function extractTightNumberPairs(text: string): TightNumberPair[] {
-  const prepared = prepareOcr(text);
+  const prepared = normalizeSlashes(prepareOcr(text));
   const pairs: TightNumberPair[] = [];
 
-  // Isolado: 112/086  (O12/O86 com O de OCR)
-  const alone =
-    /(?<![0-9A-Z])([0-9O]{3})\/([0-9O]{3})(?![0-9A-Z])/g;
+  // Isolado: 112/086 (permite lixo depois, ex. 112/086300)
+  const alone = /([0-9O]{3})\/([0-9O]{3})/g;
   for (const match of prepared.matchAll(alone)) {
-    pushPair(pairs, match[1], match[2], `${toDigits(match[1])}/${toDigits(match[2])}`);
+    pushPair(
+      pairs,
+      match[1],
+      match[2],
+      `${toDigits(match[1])}/${toDigits(match[2])}`,
+    );
   }
 
   // Colado no código: CRIPT112/086 ou CRI112/086
   const glued = new RegExp(
-    `(?<![A-Z0-9])(?:[A-Z0-9]{3})(?:${LANG_ALT})?([0-9O]{3})\\/([0-9O]{3})(?![0-9A-Z])`,
+    `(?<![A-Z0-9])(?:[A-Z0-9]{3})(?:${LANG_ALT})?([0-9O]{3})\\/([0-9O]{3})`,
     "g",
   );
   for (const match of prepared.matchAll(glued)) {
-    pushPair(pairs, match[1], match[2], `${toDigits(match[1])}/${toDigits(match[2])}`);
+    pushPair(
+      pairs,
+      match[1],
+      match[2],
+      `${toDigits(match[1])}/${toDigits(match[2])}`,
+    );
   }
 
   return pairs;
@@ -75,12 +93,9 @@ export function extractTightNumberPairs(text: string): TightNumberPair[] {
  * ex.: CR1). Ignora números puros e idiomas. Aceita CRI ou CRIPT → CRI.
  */
 export function extractTightLetterWords(text: string): string[] {
-  const prepared = prepareOcr(text);
+  const prepared = normalizeSlashes(prepareOcr(text));
   // Não tratar o próprio NNN/NNN como “palavra”
-  const withoutPairs = prepared.replace(
-    /(?<![0-9A-Z])[0-9O]{3}\/[0-9O]{3}(?![0-9A-Z])/g,
-    " ",
-  );
+  const withoutPairs = prepared.replace(/[0-9O]{3}\/[0-9O]{3}/g, " ");
   const words = new Set<string>();
 
   const accept = (token: string) => {
@@ -101,7 +116,7 @@ export function extractTightLetterWords(text: string): string[] {
 
   // Colado no número: CRIPT112/086 → CRI
   const gluedToNumber = new RegExp(
-    `(?<![A-Z0-9])([A-Z0-9]{3})(?:${LANG_ALT})?[0-9O]{3}\\/[0-9O]{3}(?![0-9A-Z])`,
+    `(?<![A-Z0-9])([A-Z0-9]{3})(?:${LANG_ALT})?[0-9O]{3}\\/[0-9O]{3}`,
     "g",
   );
   for (const match of prepared.matchAll(gluedToNumber)) {
@@ -111,6 +126,12 @@ export function extractTightLetterWords(text: string): string[] {
   // Exatamente 3 chars isolados: CRI / CR1
   const alone = /(?<![A-Z0-9])([A-Z0-9]{3})(?![A-Z0-9])/g;
   for (const match of withoutPairs.matchAll(alone)) {
+    accept(match[1]);
+  }
+
+  // 4 chars com ruído na frente (BCRI → CRI)
+  const noisy = /(?<![A-Z0-9])[A-Z0-9]([A-Z0-9]{3})(?![A-Z0-9])/g;
+  for (const match of withoutPairs.matchAll(noisy)) {
     accept(match[1]);
   }
 

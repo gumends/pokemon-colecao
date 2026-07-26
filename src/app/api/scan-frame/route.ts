@@ -23,7 +23,7 @@ async function getOcrWorker() {
 async function ocrBuffer(buffer: Buffer): Promise<string> {
   const worker = await getOcrWorker();
   await worker.setParameters({
-    tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/ ",
+    tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/",
     tessedit_pageseg_mode: PSM.SPARSE_TEXT,
   });
   const {
@@ -31,6 +31,8 @@ async function ocrBuffer(buffer: Buffer): Promise<string> {
   } = await worker.recognize(buffer);
   return text ?? "";
 }
+
+type Band = { left: number; top: number; width: number; height: number };
 
 /** Gera várias versões processadas da região do código. */
 async function buildOcrVariants(input: Buffer): Promise<Buffer[]> {
@@ -40,13 +42,18 @@ async function buildOcrVariants(input: Buffer): Promise<Buffer[]> {
   if (width < 10 || height < 10) return [input];
 
   // Cliente já manda faixa inferior → processa a imagem inteira.
-  // Foto completa → corta faixas de baixo/meio-baixo.
+  // Foto completa → prioriza canto inferior esquerdo (código impresso).
   const alreadyCropped = height / width < 0.85;
-  const bands = alreadyCropped
-    ? [{ left: 0, top: 0, width: 1, height: 1 }]
+  const bands: Band[] = alreadyCropped
+    ? [
+        { left: 0, top: 0, width: 1, height: 1 },
+        { left: 0, top: 0.35, width: 0.75, height: 0.65 },
+      ]
     : [
-        { left: 0.03, top: 0.7, width: 0.65, height: 0.26 },
-        { left: 0.05, top: 0.55, width: 0.55, height: 0.28 },
+        // código impresso fica bem no rodapé esquerdo
+        { left: 0.1, top: 0.82, width: 0.5, height: 0.1 },
+        { left: 0.08, top: 0.78, width: 0.55, height: 0.14 },
+        { left: 0.05, top: 0.68, width: 0.6, height: 0.22 },
       ];
 
   const out: Buffer[] = [];
@@ -62,26 +69,33 @@ async function buildOcrVariants(input: Buffer): Promise<Buffer[]> {
       height: Math.max(1, Math.min(h, height - top)),
     };
 
+    // contraste + nitidez
     out.push(
       await sharp(input, { failOn: "none" })
         .extract(region)
-        .resize({ width: 800, withoutEnlargement: false })
+        .resize({ width: 1400, withoutEnlargement: false })
         .grayscale()
         .normalize()
-        .sharpen()
+        .linear(1.35, -15)
+        .sharpen({ sigma: 1.5 })
         .png()
         .toBuffer(),
     );
-    out.push(
-      await sharp(input, { failOn: "none" })
-        .extract(region)
-        .resize({ width: 800, withoutEnlargement: false })
-        .grayscale()
-        .normalize()
-        .threshold(145)
-        .png()
-        .toBuffer(),
-    );
+
+    // limiares — 160 leu bem 112/086 nesta carta holo
+    for (const thr of [140, 160, 175]) {
+      out.push(
+        await sharp(input, { failOn: "none" })
+          .extract(region)
+          .resize({ width: 1400, withoutEnlargement: false })
+          .grayscale()
+          .normalize()
+          .linear(1.4, -20)
+          .threshold(thr)
+          .png()
+          .toBuffer(),
+      );
+    }
   }
   return out;
 }
@@ -112,7 +126,6 @@ export async function POST(request: Request) {
         const text = await ocrBuffer(variant);
         if (!text.trim()) continue;
         texts.push(text);
-        // Só tenta resolver quando já há NNN/NNN colado (sem espaço)
         const joined = texts.join("\n");
         if (!hasUsableTightTokens(joined)) continue;
         const partial = await smartResolveFromOcrText(joined);
