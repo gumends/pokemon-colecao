@@ -13,6 +13,8 @@ export type CardBrief = {
   variant: CardVariant;
   /** Tipos do Pokémon (ex.: Planta, Fogo). Vazio para Treinador/Energia. */
   types?: string[];
+  /** Categoria TCGdex: Pokémon, Treinador, Energia. */
+  category?: string;
   /** Quantidade oficial de cartas da coleção (ex.: 86 → link Liga 003/086). */
   setOfficialCount?: number;
 };
@@ -31,6 +33,7 @@ export type TcgdexCardDetail = {
   name: string;
   image?: string;
   types?: string[];
+  category?: string;
   variants?: CardVariantsFlags;
   variants_detailed?: Array<{
     type?: string;

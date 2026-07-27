@@ -5,7 +5,11 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { CardGrid } from "@/components/card-grid";
 import { LoadingState } from "@/components/loading-state";
-import { collectTypes, TypeFilter } from "@/components/type-filter";
+import {
+  cardMatchesTypeFilter,
+  collectTypes,
+  TypeFilter,
+} from "@/components/type-filter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { apiFetch } from "@/lib/api-client";
@@ -42,7 +46,7 @@ function filterCards(
 ): CardBrief[] {
   let result = cards;
   if (typeFilter) {
-    result = result.filter((card) => card.types?.includes(typeFilter));
+    result = result.filter((card) => cardMatchesTypeFilter(card, typeFilter));
   }
   const term = query.trim();
   if (!term) return result;

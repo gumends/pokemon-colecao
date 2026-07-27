@@ -9,7 +9,11 @@ import { CardGrid } from "@/components/card-grid";
 import { LoadingState } from "@/components/loading-state";
 import { ScrollButtons } from "@/components/scroll-buttons";
 import { SetGrid } from "@/components/set-grid";
-import { collectTypes, TypeFilter } from "@/components/type-filter";
+import {
+  cardMatchesTypeFilter,
+  collectTypes,
+  TypeFilter,
+} from "@/components/type-filter";
 import { Badge } from "@/components/ui/badge";
 import {
   Select,
@@ -199,7 +203,7 @@ export function SetBrowser({
     let cards = setDetail?.cards ?? [];
 
     if (typeFilter) {
-      cards = cards.filter((card) => card.types?.includes(typeFilter));
+      cards = cards.filter((card) => cardMatchesTypeFilter(card, typeFilter));
     }
 
     const term = query.trim();

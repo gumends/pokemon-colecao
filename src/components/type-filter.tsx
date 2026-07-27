@@ -3,6 +3,9 @@
 import type { CardBrief } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
+/** Filtro sintético: Itens, Estádios e Apoiadores (categoria Treinador). */
+export const TRAINER_FILTER = "Treinador";
+
 const TYPE_ORDER = [
   "Planta",
   "Fogo",
@@ -15,13 +18,26 @@ const TYPE_ORDER = [
   "Dragão",
   "Fada",
   "Incolor",
+  TRAINER_FILTER,
 ];
 
-/** Tipos presentes nas cartas, na ordem clássica do TCG. */
+export function cardMatchesTypeFilter(
+  card: CardBrief,
+  typeFilter: string | null,
+): boolean {
+  if (!typeFilter) return true;
+  if (typeFilter === TRAINER_FILTER) {
+    return card.category === TRAINER_FILTER;
+  }
+  return card.types?.includes(typeFilter) ?? false;
+}
+
+/** Tipos presentes nas cartas, na ordem clássica do TCG (+ Treinador). */
 export function collectTypes(cards: CardBrief[]): string[] {
   const found = new Set<string>();
   for (const card of cards) {
     for (const type of card.types ?? []) found.add(type);
+    if (card.category === TRAINER_FILTER) found.add(TRAINER_FILTER);
   }
   const ordered = TYPE_ORDER.filter((type) => found.has(type));
   const extras = [...found].filter((type) => !TYPE_ORDER.includes(type)).sort();
@@ -57,6 +73,7 @@ const TYPE_VISUALS: Record<string, TypeVisual> = {
   Dragon: { icon: "Dragon", color: "#C6A114" },
   Incolor: { icon: "Colorless", color: "#E8E6E1" },
   Colorless: { icon: "Colorless", color: "#E8E6E1" },
+  [TRAINER_FILTER]: { icon: "Trainer", color: "#5C6BC0" },
 };
 
 type TypeFilterProps = {

@@ -1,6 +1,13 @@
 "use client";
 
-import { Suspense, useCallback, useMemo, useState, type ReactNode } from "react";
+import {
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 
 import { CardGrid } from "@/components/card-grid";
 import { CardScanner } from "@/components/card-scanner";
@@ -9,15 +16,26 @@ import { LoadingState } from "@/components/loading-state";
 import { SearchBar } from "@/components/search-bar";
 import { SetBrowser } from "@/components/set-browser";
 import { StatCards } from "@/components/stat-cards";
-import { collectTypes, TypeFilter } from "@/components/type-filter";
+import {
+  cardMatchesTypeFilter,
+  collectTypes,
+  TypeFilter,
+} from "@/components/type-filter";
 import { useCollection } from "@/hooks/use-collection";
 import {
   type AppTab,
   useCollectionUrl,
 } from "@/hooks/use-collection-url";
+import { cardMatchesQuery, parseCardCodeQuery } from "@/lib/card-query";
 import type { CardBrief } from "@/lib/types";
-import { cardMatchesQuery } from "@/lib/card-query";
 import { cn } from "@/lib/utils";
+
+type OtherSetHit = {
+  setId: string;
+  setName: string;
+  officialCount: number;
+  cards: CardBrief[];
+};
 
 function cardIsInSet(card: CardBrief, setId: string): boolean {
   return card.tcgdexId.startsWith(`${setId}-`) || card.tcgdexId === setId;
@@ -31,7 +49,7 @@ function filterCards(
   let result = cards;
 
   if (typeFilter) {
-    result = result.filter((card) => card.types?.includes(typeFilter));
+    result = result.filter((card) => cardMatchesTypeFilter(card, typeFilter));
   }
 
   const term = query.trim();
@@ -91,6 +109,8 @@ function CollectionAppContent() {
     id: string;
     cards: CardBrief[];
   } | null>(null);
+  const [otherHits, setOtherHits] = useState<OtherSetHit[]>([]);
+  const [othersLoading, setOthersLoading] = useState(false);
 
   if (prevTab !== tab) {
     setPrevTab(tab);
@@ -140,18 +160,73 @@ function CollectionAppContent() {
     [missingCards, query, typeFilter],
   );
 
+  const matchesInCurrentSet = useMemo(() => {
+    if (!setCards || !query.trim()) return [];
+    return setCards.filter((card) => cardMatchesQuery(card, query));
+  }, [setCards, query]);
+
+  // Se não achou nesta coleção e a busca é código (083 ou 083/086), procura em outras
+  useEffect(() => {
+    if (!setId) {
+      setOtherHits([]);
+      return;
+    }
+
+    const code = parseCardCodeQuery(query);
+    if (!code) {
+      setOtherHits([]);
+      return;
+    }
+
+    // ainda carregando a coleção atual
+    if (!setCards) return;
+
+    // achou nesta coleção → não precisa das outras
+    if (matchesInCurrentSet.length > 0) {
+      setOtherHits([]);
+      return;
+    }
+
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      setOthersLoading(true);
+      void fetch(
+        `/api/search-card-code?q=${encodeURIComponent(query.trim())}&excludeSet=${encodeURIComponent(setId)}`,
+      )
+        .then(async (res) => {
+          const data = (await res.json()) as {
+            results?: OtherSetHit[];
+            error?: string;
+          };
+          if (cancelled) return;
+          setOtherHits(data.results ?? []);
+          if ((data.results?.length ?? 0) > 0) {
+            // leva a pessoa direto pra aba de outras coleções
+            setTab("others");
+          }
+        })
+        .catch(() => {
+          if (!cancelled) setOtherHits([]);
+        })
+        .finally(() => {
+          if (!cancelled) setOthersLoading(false);
+        });
+    }, 350);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [setId, query, setCards, matchesInCurrentSet.length, setTab]);
+
   const searchPlaceholder =
-    tab === "owned"
+    tab === "owned" || tab === "wanted" || tab === "friend" || tab === "others"
       ? "Nome ou 083/086…"
-      : tab === "wanted"
-        ? "Nome ou 083/086…"
-        : tab === "friend"
-          ? "Nome ou 083/086…"
-          : tab === "scan"
-            ? "Busca não usada no scanner…"
-            : setId
-              ? "Nome ou número (ex.: 083/086)…"
-              : "Buscar coleção…";
+      : tab === "scan"
+        ? "Busca não usada no scanner…"
+        : setId
+          ? "Nome ou número (ex.: 083/086)…"
+          : "Buscar coleção…";
 
   const setBrowser = (
     <SetBrowser
@@ -232,6 +307,13 @@ function CollectionAppContent() {
                 >
                   Amigo
                 </TabButton>
+                <TabButton
+                  active={tab === "others"}
+                  onClick={() => setTab("others")}
+                >
+                  Outras coleções
+                  {otherHits.length > 0 ? ` (${otherHits.length})` : ""}
+                </TabButton>
               </div>
 
               {tab === "sets" ? setBrowser : null}
@@ -289,6 +371,43 @@ function CollectionAppContent() {
                   onCodeCommit={setFriendCode}
                   query={query}
                 />
+              ) : null}
+
+              {tab === "others" ? (
+                <div className="space-y-4">
+                  {!parseCardCodeQuery(query) ? (
+                    <p className="text-sm text-muted-foreground">
+                      Digite um código como{" "}
+                      <span className="font-mono text-foreground">083/086</span>{" "}
+                      para procurar em outras coleções quando não existir nesta.
+                    </p>
+                  ) : othersLoading ? (
+                    <LoadingState message="Procurando em outras coleções…" />
+                  ) : otherHits.length === 0 ? (
+                    <div className="rounded-2xl border border-dashed border-border bg-muted/30 px-6 py-16 text-center text-sm text-muted-foreground">
+                      Não achei esse código em outras coleções.
+                    </div>
+                  ) : (
+                    otherHits.map((hit) => (
+                      <div key={hit.setId} className="space-y-2">
+                        <div className="flex flex-wrap items-baseline gap-2">
+                          <h3 className="font-heading text-base font-semibold">
+                            {hit.setName}
+                          </h3>
+                          <span className="text-xs text-muted-foreground">
+                            {hit.setId} · oficial {hit.officialCount}
+                          </span>
+                        </div>
+                        <CardGrid
+                          cards={hit.cards}
+                          getStatus={getStatus}
+                          onStatusChange={updateStatus}
+                          emptyMessage="Sem variantes."
+                        />
+                      </div>
+                    ))
+                  )}
+                </div>
               ) : null}
             </div>
           )}

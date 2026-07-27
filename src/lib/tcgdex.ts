@@ -277,6 +277,7 @@ export function expandCardToVariantEntries(
     image: card.image,
     variant,
     types: card.types,
+    category: card.category,
     setOfficialCount,
   }));
 }
@@ -340,6 +341,61 @@ export async function searchCards(
     image: card.image,
     variant: "normal" as const,
   }));
+}
+
+/** Busca cartas pelo número impresso (localId), ex.: 083. */
+export async function searchCardsByLocalId(
+  localId: string,
+  options?: { page?: number; perPage?: number; signal?: AbortSignal },
+): Promise<
+  Array<{ id: string; localId: string; name: string; image?: string }>
+> {
+  const id = localId.trim();
+  if (!id) return [];
+
+  const variants = [
+    id.padStart(3, "0"),
+    String(Number(id.replace(/\D/g, ""))),
+    id,
+  ].filter((v, i, arr) => v && arr.indexOf(v) === i);
+
+  const seen = new Set<string>();
+  const out: Array<{
+    id: string;
+    localId: string;
+    name: string;
+    image?: string;
+  }> = [];
+
+  for (const variant of variants) {
+    const params = new URLSearchParams();
+    params.set("localId", variant);
+    params.set("pagination:page", String(options?.page ?? 1));
+    params.set(
+      "pagination:itemsPerPage",
+      String(options?.perPage ?? 40),
+    );
+
+    const response = await fetch(`${TCGDEX_BASE}/cards?${params.toString()}`, {
+      signal: options?.signal,
+    });
+    if (!response.ok) continue;
+
+    const briefs = (await response.json()) as Array<{
+      id: string;
+      localId: string;
+      name: string;
+      image?: string;
+    }>;
+
+    for (const card of briefs) {
+      if (seen.has(card.id)) continue;
+      seen.add(card.id);
+      out.push(card);
+    }
+  }
+
+  return out;
 }
 
 export async function getCard(
