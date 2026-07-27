@@ -6,6 +6,7 @@ import { useEffect, useRef, useState, type ChangeEvent } from "react";
 
 import { CardGrid } from "@/components/card-grid";
 import { Button } from "@/components/ui/button";
+import { ocrCodeStripInBrowser, ocrImageInBrowser } from "@/lib/client-ocr";
 import { cardImageUrl } from "@/lib/tcgdex";
 import type { CardBrief, CollectionStatus } from "@/lib/types";
 
@@ -93,53 +94,48 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
     lastFoundRef.current = data.tcgdexId;
   }
 
-  async function scanImageBase64(
-    imageBase64: string,
-    options?: { textOnly?: boolean },
-  ): Promise<{
+  /** OCR no browser + resolve no servidor (funciona na Vercel). */
+  async function scanImageBase64(imageBase64: string): Promise<{
     result: LookupResult | null;
     ocrText: string;
   }> {
-    const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), 90_000);
-
+    setLiveStatus("Lendo texto no aparelho…");
+    const fullText = await ocrImageInBrowser(imageBase64);
+    let stripText = "";
     try {
-      const response = await fetch("/api/scan-frame", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          imageBase64,
-          textOnly: options?.textOnly === true,
-        }),
-        signal: controller.signal,
-      });
-      const data = (await response.json()) as LookupResult & {
-        ok?: boolean;
-        reason?: string;
-        error?: string;
-        ocrText?: string;
-      };
-
-      if (!response.ok) {
-        throw new Error(data.error ?? "Falha no scan.");
-      }
-
-      const text = data.ocrText ?? "";
-      if (text) setOcrText(text);
-
-      if (options?.textOnly || !data.ok || !data.cards) {
-        return { result: null, ocrText: text };
-      }
-
-      return { result: data as LookupResult, ocrText: text };
-    } catch (err) {
-      if (err instanceof DOMException && err.name === "AbortError") {
-        throw new Error("OCR demorou demais. Tente de novo com a carta mais perto.");
-      }
-      throw err;
-    } finally {
-      window.clearTimeout(timeout);
+      stripText = await ocrCodeStripInBrowser(imageBase64);
+    } catch {
+      // opcional
     }
+    const joined = [fullText, stripText].filter(Boolean).join("\n");
+    setOcrText(joined);
+
+    if (!joined.trim()) {
+      return { result: null, ocrText: "" };
+    }
+
+    setLiveStatus("Resolvendo carta…");
+    const response = await fetch("/api/resolve-ocr", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ocrText: joined }),
+    });
+    const data = (await response.json()) as LookupResult & {
+      ok?: boolean;
+      reason?: string;
+      error?: string;
+      ocrText?: string;
+    };
+
+    if (!response.ok) {
+      throw new Error(data.error ?? "Falha ao resolver a carta.");
+    }
+
+    if (!data.ok || !data.cards) {
+      return { result: null, ocrText: joined };
+    }
+
+    return { result: data as LookupResult, ocrText: joined };
   }
 
   // Câmera: procura até achar UMA carta → para tudo e mostra embaixo
@@ -186,7 +182,6 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
           return;
         }
 
-        // Achou → trava, para câmera, mostra carta. Não procura mais nada.
         foundLockRef.current = true;
         cancelled = true;
         window.clearInterval(intervalId);
@@ -207,7 +202,7 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
 
     const intervalId = window.setInterval(() => {
       void tick();
-    }, 2200);
+    }, 2500);
     void tick();
 
     return () => {
@@ -269,27 +264,21 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
         reader.readAsDataURL(file);
       });
 
-      // 1) Lê e mostra o texto NA HORA
-      const { ocrText: readText } = await scanImageBase64(dataUrl, {
-        textOnly: true,
-      });
-      if (!readText) {
-        setPhase("idle");
-        setError("Não consegui ler nenhuma palavra. Tente outra foto, mais nítida.");
-        return;
-      }
-
-      // 2) Depois tenta achar o código (sem apagar o texto já mostrado)
-      setLiveStatus("Procurando código CRI + NNN/NNN…");
-      const { result: found } = await scanImageBase64(dataUrl);
+      const { result: found, ocrText: readText } =
+        await scanImageBase64(dataUrl);
       if (!found) {
         setPhase("idle");
         setError(
-          "Texto lido abaixo. Ainda não achei CRI + NNN/NNN colados — use busca manual se quiser.",
+          readText
+            ? "Texto lido abaixo. Ainda não identifiquei a carta — tente busca manual."
+            : "Não consegui ler nenhuma palavra. Tente outra foto, mais nítida.",
         );
         return;
       }
       await applyResult(found);
+      setLiveStatus(
+        `Carta encontrada: ${found.cards[0]?.name ?? found.tcgdexId}`,
+      );
     } catch (err) {
       setPhase("idle");
       setError(err instanceof Error ? err.message : "Falha ao ler a imagem.");
@@ -335,9 +324,9 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
           <div className="space-y-1">
             <h2 className="font-heading text-lg font-semibold">Escanear carta</h2>
             <p className="text-sm text-muted-foreground">
-              Na câmera: enquadre a carta. Quando achar,{" "}
+              OCR roda no seu aparelho (funciona em produção). Ao achar a carta,{" "}
               <span className="text-foreground">para na hora</span> e mostra
-              embaixo. Também dá para enviar foto.
+              embaixo.
             </p>
           </div>
         </div>
@@ -400,7 +389,7 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
         {phase === "looking" && !cameraOpen ? (
           <p className="mt-4 flex items-center gap-2 text-sm text-muted-foreground">
             <Loader2 className="size-4 animate-spin" />
-            Lendo todas as palavras da carta…
+            Lendo carta no aparelho…
           </p>
         ) : null}
 
@@ -425,7 +414,6 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
           </div>
         ) : null}
 
-        {/* Campo sempre visível com o texto OCR — clique para expandir */}
         <div className="mt-4 space-y-2">
           <div className="flex items-center justify-between gap-2">
             <span className="text-sm font-medium">Texto lido na carta</span>
