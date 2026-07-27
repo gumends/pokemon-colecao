@@ -6,7 +6,7 @@ import { useEffect, useRef, useState, type ChangeEvent } from "react";
 
 import { CardGrid } from "@/components/card-grid";
 import { Button } from "@/components/ui/button";
-import { ocrCardWithRetries } from "@/lib/client-ocr";
+import { ocrCodeStripInBrowser, ocrImageInBrowser } from "@/lib/client-ocr";
 import { cardImageUrl } from "@/lib/tcgdex";
 import type { CardBrief, CollectionStatus } from "@/lib/types";
 
@@ -26,28 +26,16 @@ type CardScannerProps = {
   onStatusChange: (card: CardBrief, status: CollectionStatus | null) => void;
 };
 
-/** Captura a carta e já clareia um pouco (ajuda ambiente escuro). */
+/** Captura a carta inteira (não só o rodapé) para ler todas as palavras. */
 function captureVideoFrame(video: HTMLVideoElement): string | null {
   if (video.videoWidth === 0) return null;
   const canvas = document.createElement("canvas");
   canvas.width = video.videoWidth;
   canvas.height = video.videoHeight;
-  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  const ctx = canvas.getContext("2d");
   if (!ctx) return null;
   ctx.drawImage(video, 0, 0);
-  try {
-    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const data = imageData.data;
-    for (let i = 0; i < data.length; i += 4) {
-      data[i] = Math.min(255, data[i] * 1.25 + 12);
-      data[i + 1] = Math.min(255, data[i + 1] * 1.25 + 12);
-      data[i + 2] = Math.min(255, data[i + 2] * 1.25 + 12);
-    }
-    ctx.putImageData(imageData, 0, 0);
-  } catch {
-    // ignore se canvas tainted
-  }
-  return canvas.toDataURL("image/jpeg", 0.9);
+  return canvas.toDataURL("image/jpeg", 0.85);
 }
 
 export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
@@ -106,14 +94,20 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
     lastFoundRef.current = data.tcgdexId;
   }
 
-  /** OCR no browser (clareia + retenta) + resolve no servidor. */
+  /** OCR no browser + resolve no servidor (funciona na Vercel). */
   async function scanImageBase64(imageBase64: string): Promise<{
     result: LookupResult | null;
     ocrText: string;
   }> {
-    const joined = await ocrCardWithRetries(imageBase64, (msg) => {
-      setLiveStatus(msg);
-    });
+    setLiveStatus("Lendo texto no aparelho…");
+    const fullText = await ocrImageInBrowser(imageBase64);
+    let stripText = "";
+    try {
+      stripText = await ocrCodeStripInBrowser(imageBase64);
+    } catch {
+      // opcional
+    }
+    const joined = [fullText, stripText].filter(Boolean).join("\n");
     setOcrText(joined);
 
     if (!joined.trim()) {
@@ -182,8 +176,8 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
         if (!found) {
           setLiveStatus(
             readText
-              ? "Ainda sem match — próximo frame com filtro mais claro…"
-              : "Escuro demais? Segure firme — vou clarear e tentar de novo…",
+              ? "Ainda procurando… (texto parcial abaixo)"
+              : "Aproxime a carta e segure firme…",
           );
           return;
         }
@@ -208,7 +202,7 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
 
     const intervalId = window.setInterval(() => {
       void tick();
-    }, 4000);
+    }, 2500);
     void tick();
 
     return () => {
@@ -330,9 +324,8 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
           <div className="space-y-1">
             <h2 className="font-heading text-lg font-semibold">Escanear carta</h2>
             <p className="text-sm text-muted-foreground">
-              OCR no aparelho com filtros que{" "}
-              <span className="text-foreground">clareiam</span> a carta. Se
-              falhar, tenta de novo com outro filtro. Ao achar, para e mostra
+              OCR roda no seu aparelho (funciona em produção). Ao achar a carta,{" "}
+              <span className="text-foreground">para na hora</span> e mostra
               embaixo.
             </p>
           </div>
