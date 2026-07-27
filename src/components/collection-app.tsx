@@ -28,6 +28,7 @@ import {
   useCollectionUrl,
 } from "@/hooks/use-collection-url";
 import { cardMatchesQuery, parseCardCodeQuery } from "@/lib/card-query";
+import { cacheSetVariantTotal } from "@/lib/tcgdex";
 import type { CardBrief } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -131,6 +132,7 @@ function CollectionAppContent() {
   const handleSetCardsChange = useCallback(
     (loadedSetId: string, cards: CardBrief[]) => {
       setLoadedSet({ id: loadedSetId, cards });
+      cacheSetVariantTotal(loadedSetId, cards.length);
     },
     [],
   );

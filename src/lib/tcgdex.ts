@@ -577,3 +577,52 @@ export function ownedCountInSet(
   }
   return count;
 }
+
+/** Quantas cartas distintas do set (ignora normal/reverse/holo). */
+export function ownedUniqueCountInSet(
+  setId: string,
+  ownedCardIds: Iterable<string>,
+): number {
+  const prefix = `${setId}-`;
+  const unique = new Set<string>();
+  for (const id of ownedCardIds) {
+    const tcgdexId = id.includes("::") ? id.split("::")[0] : id;
+    if (tcgdexId.startsWith(prefix) || tcgdexId === setId) {
+      unique.add(tcgdexId);
+    }
+  }
+  return unique.size;
+}
+
+const VARIANT_TOTALS_KEY = "pokemon_colecao_set_variant_totals";
+
+/** Totais de variantes já carregados (normal+reverse+…). */
+export function readCachedVariantTotals(): Record<string, number> {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(VARIANT_TOTALS_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const out: Record<string, number> = {};
+    for (const [id, value] of Object.entries(parsed)) {
+      if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+        out[id] = value;
+      }
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+export function cacheSetVariantTotal(setId: string, variantCount: number) {
+  if (typeof window === "undefined" || variantCount <= 0) return;
+  try {
+    const current = readCachedVariantTotals();
+    if (current[setId] === variantCount) return;
+    current[setId] = variantCount;
+    window.localStorage.setItem(VARIANT_TOTALS_KEY, JSON.stringify(current));
+  } catch {
+    // storage cheio / privado
+  }
+}
