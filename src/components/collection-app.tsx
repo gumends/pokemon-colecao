@@ -5,6 +5,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -111,6 +112,8 @@ function CollectionAppContent() {
   } | null>(null);
   const [otherHits, setOtherHits] = useState<OtherSetHit[]>([]);
   const [othersLoading, setOthersLoading] = useState(false);
+  const tabRef = useRef(tab);
+  tabRef.current = tab;
 
   if (prevTab !== tab) {
     setPrevTab(tab);
@@ -199,9 +202,10 @@ function CollectionAppContent() {
             error?: string;
           };
           if (cancelled) return;
-          setOtherHits(data.results ?? []);
-          if ((data.results?.length ?? 0) > 0) {
-            // leva a pessoa direto pra aba de outras coleções
+          const results = data.results ?? [];
+          setOtherHits(results);
+          // Só troca de aba uma vez, quando ainda estamos na grade do set
+          if (results.length > 0 && tabRef.current === "sets") {
             setTab("others");
           }
         })

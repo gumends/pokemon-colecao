@@ -122,48 +122,49 @@ export function CardItem({
         )}
       </Card>
 
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent
-          className="max-w-md gap-4 bg-background/60 p-4 backdrop-blur-xl sm:max-w-lg"
-          showCloseButton
-        >
-          <DialogHeader>
-            <DialogTitle>{card.name}</DialogTitle>
-            <DialogDescription>
-              {variantLabel} · #{card.localId}
-              {card.setOfficialCount
-                ? ` / ${String(card.setOfficialCount).padStart(3, "0")}`
-                : null}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="relative mx-auto aspect-[63/88] w-full max-w-[420px] overflow-hidden rounded-xl">
-            {largeImageSrc ? (
-              <Image
-                src={largeImageSrc}
-                alt={`${card.name} (${variantLabel})`}
-                fill
-                sizes="(max-width: 640px) 90vw, 420px"
-                className="object-contain"
-                priority
-              />
-            ) : (
-              <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-                Sem imagem
-              </div>
-            )}
-          </div>
-          <Button
-            className="w-full"
-            nativeButton={false}
-            render={
-              <a href={ligaUrl} target="_blank" rel="noopener noreferrer" />
-            }
+      {open ? (
+        <Dialog open={open} onOpenChange={setOpen}>
+          <DialogContent
+            className="max-w-md gap-4 bg-background/60 p-4 backdrop-blur-xl sm:max-w-lg"
+            showCloseButton
           >
-            <CircleDollarSign data-icon="inline-start" />
-            Ver preço na Liga Pokémon
-          </Button>
-        </DialogContent>
-      </Dialog>
+            <DialogHeader>
+              <DialogTitle>{card.name}</DialogTitle>
+              <DialogDescription>
+                {variantLabel} · #{card.localId}
+                {card.setOfficialCount
+                  ? ` / ${String(card.setOfficialCount).padStart(3, "0")}`
+                  : null}
+              </DialogDescription>
+            </DialogHeader>
+            <div className="relative mx-auto aspect-[63/88] w-full max-w-[420px] overflow-hidden rounded-xl">
+              {largeImageSrc ? (
+                <Image
+                  src={largeImageSrc}
+                  alt={`${card.name} (${variantLabel})`}
+                  fill
+                  sizes="(max-width: 640px) 90vw, 420px"
+                  className="object-contain"
+                />
+              ) : (
+                <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                  Sem imagem
+                </div>
+              )}
+            </div>
+            <Button
+              className="w-full"
+              nativeButton={false}
+              render={
+                <a href={ligaUrl} target="_blank" rel="noopener noreferrer" />
+              }
+            >
+              <CircleDollarSign data-icon="inline-start" />
+              Ver preço na Liga Pokémon
+            </Button>
+          </DialogContent>
+        </Dialog>
+      ) : null}
     </>
   );
 }

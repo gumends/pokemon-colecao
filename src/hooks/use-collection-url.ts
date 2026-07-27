@@ -41,18 +41,29 @@ export function useCollectionUrl() {
       }
 
       const next = params.toString();
-      router.replace(next ? `${pathname}?${next}` : pathname, { scroll: false });
+      const current = searchParams.toString();
+      // Evita loop infinito: setTab/setQuery com o mesmo valor
+      // recriava o callback e disparava effects de novo.
+      if (next === current) return;
+
+      router.replace(next ? `${pathname}?${next}` : pathname, {
+        scroll: false,
+      });
     },
     [pathname, router, searchParams],
   );
 
   const setTab = useCallback(
     (nextTab: AppTab) => {
+      const currentTab = isAppTab(searchParams.get("tab"))
+        ? (searchParams.get("tab") as AppTab)
+        : "sets";
+      if (currentTab === nextTab) return;
       replaceParams({
         tab: nextTab === "sets" ? null : nextTab,
       });
     },
-    [replaceParams],
+    [replaceParams, searchParams],
   );
 
   const setQuery = useCallback(

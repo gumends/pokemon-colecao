@@ -1,6 +1,7 @@
 "use client";
 
 import { ChevronLeft, ChevronRight } from "lucide-react";
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -73,7 +74,8 @@ export function SetBrowser({
   const [serieSetIds, setSerieSetIds] = useState<Set<string> | null>(null);
   const [setDetail, setSetDetail] = useState<SetDetail | null>(null);
   const [typeFilter, setTypeFilter] = useState<string | null>(null);
-  const [binder, setBinder] = useState<string>("none");
+  // Paginação por padrão: renderizar 200+ cartas de uma vez trava a UI
+  const [binder, setBinder] = useState<string>("4x3");
   const [page, setPage] = useState(0);
   const [isLoadingSets, setIsLoadingSets] = useState(true);
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
@@ -228,6 +230,15 @@ export function SetBrowser({
     return (
       <div className="space-y-4">
         <ScrollButtons />
+        <div>
+          <Link
+            href="/"
+            className="mb-1 inline-flex -ml-2 h-7 items-center gap-1 rounded-lg px-2.5 text-[0.8rem] font-medium text-foreground/70 transition-colors hover:bg-muted hover:text-foreground"
+          >
+            <ChevronLeft className="size-3.5" />
+            Voltar às coleções
+          </Link>
+        </div>
         {setDetail ? (
           <div className="flex flex-wrap items-center gap-3">
             <div>
