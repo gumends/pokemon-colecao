@@ -6,6 +6,7 @@ import { useEffect, useRef, useState, type ChangeEvent } from "react";
 
 import { CardGrid } from "@/components/card-grid";
 import { Button } from "@/components/ui/button";
+import { getAuthToken } from "@/lib/api-client";
 import { ocrCodeStripInBrowser, ocrImageInBrowser } from "@/lib/client-ocr";
 import { cardImageUrl } from "@/lib/tcgdex";
 import type { CardBrief, CollectionStatus } from "@/lib/types";
@@ -19,6 +20,7 @@ type LookupResult = {
   cards: CardBrief[];
   strategy?: string;
   ocrText?: string;
+  engine?: string;
 };
 
 type CardScannerProps = {
@@ -86,11 +88,59 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
     lastFoundRef.current = data.tcgdexId;
   }
 
-  async function scanImageBase64(imageBase64: string): Promise<{
+  async function scanWithTextract(imageBase64: string): Promise<{
+    result: LookupResult | null;
+    ocrText: string;
+    failed?: boolean;
+  }> {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    const token = getAuthToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+
+    const response = await fetch("/api/scan-textract", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ imageBase64 }),
+    });
+
+    const data = (await response.json()) as LookupResult & {
+      ok?: boolean;
+      reason?: string;
+      error?: string;
+      ocrText?: string;
+      engine?: string;
+    };
+
+    // Sem credencial / sem permissão → deixa o Tesseract tentar
+    if (response.status === 401 || response.status === 502) {
+      return { result: null, ocrText: "", failed: true };
+    }
+
+    if (!response.ok) {
+      throw new Error(data.error ?? "Falha no Textract.");
+    }
+
+    if (!data.ok || !data.cards) {
+      return {
+        result: null,
+        ocrText: data.ocrText ?? "",
+        failed: data.reason === "textract-failed",
+      };
+    }
+
+    return {
+      result: { ...data, engine: data.engine ?? "textract" } as LookupResult,
+      ocrText: data.ocrText ?? "",
+    };
+  }
+
+  async function scanWithTesseract(imageBase64: string): Promise<{
     result: LookupResult | null;
     ocrText: string;
   }> {
-    setLiveStatus("Lendo texto no aparelho…");
+    setLiveStatus("Lendo texto no aparelho (Tesseract)…");
     const fullText = await ocrImageInBrowser(imageBase64);
     let stripText = "";
     try {
@@ -125,7 +175,31 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
       return { result: null, ocrText: joined };
     }
 
-    return { result: data as LookupResult, ocrText: joined };
+    return {
+      result: { ...data, engine: "tesseract" } as LookupResult,
+      ocrText: joined,
+    };
+  }
+
+  async function scanImageBase64(imageBase64: string): Promise<{
+    result: LookupResult | null;
+    ocrText: string;
+  }> {
+    setLiveStatus("Lendo com Amazon Textract…");
+    try {
+      const textract = await scanWithTextract(imageBase64);
+      if (textract.result) return textract;
+      // Textract leu mas não achou carta — ainda tenta Tesseract
+      if (!textract.failed && textract.ocrText) {
+        setLiveStatus("Textract não achou; tentando no aparelho…");
+      } else {
+        setLiveStatus("Textract indisponível; tentando no aparelho…");
+      }
+    } catch {
+      setLiveStatus("Textract falhou; tentando no aparelho…");
+    }
+
+    return scanWithTesseract(imageBase64);
   }
 
   useEffect(() => {
@@ -278,8 +352,8 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
           <div className="space-y-1">
             <h2 className="font-heading text-lg font-semibold">Escanear carta</h2>
             <p className="text-sm text-muted-foreground">
-              Use a câmera ou envie uma foto. Ao achar a carta, para e mostra
-              embaixo.
+              Use a câmera ou envie uma foto. O texto é lido com Amazon Textract
+              (e Tesseract se precisar). Ao achar, para e mostra embaixo.
             </p>
           </div>
         </div>
@@ -342,7 +416,7 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
         {phase === "looking" && !cameraOpen ? (
           <p className="mt-4 flex items-center gap-2 text-sm text-muted-foreground">
             <Loader2 className="size-4 animate-spin" />
-            Lendo carta no aparelho…
+            Lendo carta…
           </p>
         ) : null}
 
@@ -390,6 +464,7 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
           </div>
           <p className="text-xs text-muted-foreground">
             Marque a variante. Para outra carta, abra a câmera de novo.
+            {result.engine ? ` · OCR: ${result.engine}` : ""}
           </p>
           <CardGrid
             cards={result.cards}

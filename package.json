@@ -11,6 +11,7 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@aws-sdk/client-textract": "^3.1095.0",
     "@base-ui/react": "^1.6.0",
     "@tcgdex/sdk": "^2.9.0",
     "class-variance-authority": "^0.7.1",
