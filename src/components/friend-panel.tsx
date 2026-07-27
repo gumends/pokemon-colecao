@@ -9,6 +9,7 @@ import { collectTypes, TypeFilter } from "@/components/type-filter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { apiFetch } from "@/lib/api-client";
+import { cardMatchesQuery } from "@/lib/card-query";
 import type { CardBrief, CollectionMap, CollectionStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -43,17 +44,9 @@ function filterCards(
   if (typeFilter) {
     result = result.filter((card) => card.types?.includes(typeFilter));
   }
-  const term = query.trim().toLowerCase();
+  const term = query.trim();
   if (!term) return result;
-  return result.filter((card) => {
-    const variant = card.variant?.toLowerCase() ?? "";
-    return (
-      card.name.toLowerCase().includes(term) ||
-      card.localId.toLowerCase().includes(term) ||
-      card.id.toLowerCase().includes(term) ||
-      variant.includes(term)
-    );
-  });
+  return result.filter((card) => cardMatchesQuery(card, term));
 }
 
 export function FriendPanel({

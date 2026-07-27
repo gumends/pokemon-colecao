@@ -16,6 +16,7 @@ import {
   useCollectionUrl,
 } from "@/hooks/use-collection-url";
 import type { CardBrief } from "@/lib/types";
+import { cardMatchesQuery } from "@/lib/card-query";
 import { cn } from "@/lib/utils";
 
 function cardIsInSet(card: CardBrief, setId: string): boolean {
@@ -33,17 +34,9 @@ function filterCards(
     result = result.filter((card) => card.types?.includes(typeFilter));
   }
 
-  const term = query.trim().toLowerCase();
+  const term = query.trim();
   if (!term) return result;
-  return result.filter((card) => {
-    const variant = card.variant?.toLowerCase() ?? "";
-    return (
-      card.name.toLowerCase().includes(term) ||
-      card.localId.toLowerCase().includes(term) ||
-      card.id.toLowerCase().includes(term) ||
-      variant.includes(term)
-    );
-  });
+  return result.filter((card) => cardMatchesQuery(card, term));
 }
 
 function TabButton({
@@ -149,15 +142,15 @@ function CollectionAppContent() {
 
   const searchPlaceholder =
     tab === "owned"
-      ? "Buscar nas cartas que tenho…"
+      ? "Nome ou 083/086…"
       : tab === "wanted"
-        ? "Buscar nas cartas que faltam…"
+        ? "Nome ou 083/086…"
         : tab === "friend"
-          ? "Buscar nas cartas do amigo…"
+          ? "Nome ou 083/086…"
           : tab === "scan"
             ? "Busca não usada no scanner…"
             : setId
-              ? "Buscar carta nesta coleção…"
+              ? "Nome ou número (ex.: 083/086)…"
               : "Buscar coleção…";
 
   const setBrowser = (

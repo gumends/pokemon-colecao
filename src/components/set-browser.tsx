@@ -24,6 +24,7 @@ import {
   listSets,
   ownedCountInSet,
 } from "@/lib/tcgdex";
+import { cardMatchesQuery } from "@/lib/card-query";
 import type {
   CardBrief,
   CollectionStatus,
@@ -31,7 +32,6 @@ import type {
   SetBrief,
   SetDetail,
 } from "@/lib/types";
-import { VARIANT_LABELS } from "@/lib/types";
 
 /** Layouts de pasta: colunas x linhas por página. */
 const BINDER_LAYOUTS: Record<string, { cols: number; rows: number } | null> = {
@@ -202,18 +202,9 @@ export function SetBrowser({
       cards = cards.filter((card) => card.types?.includes(typeFilter));
     }
 
-    const term = query.trim().toLowerCase();
+    const term = query.trim();
     if (!term) return cards;
-    return cards.filter((card) => {
-      const variantLabel = VARIANT_LABELS[card.variant]?.toLowerCase() ?? "";
-      return (
-        card.name.toLowerCase().includes(term) ||
-        card.localId.toLowerCase().includes(term) ||
-        card.tcgdexId.toLowerCase().includes(term) ||
-        variantLabel.includes(term) ||
-        card.variant.toLowerCase().includes(term)
-      );
-    });
+    return cards.filter((card) => cardMatchesQuery(card, term));
   }, [setDetail, query, typeFilter]);
 
   if (setId) {

@@ -1,6 +1,6 @@
 "use client";
 
-import { Camera, ChevronDown, ChevronUp, ImagePlus, Loader2, ScanLine, X } from "lucide-react";
+import { Camera, ImagePlus, Loader2, ScanLine, X } from "lucide-react";
 import Image from "next/image";
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
 
@@ -26,7 +26,6 @@ type CardScannerProps = {
   onStatusChange: (card: CardBrief, status: CollectionStatus | null) => void;
 };
 
-/** Captura a carta inteira (não só o rodapé) para ler todas as palavras. */
 function captureVideoFrame(video: HTMLVideoElement): string | null {
   if (video.videoWidth === 0) return null;
   const canvas = document.createElement("canvas");
@@ -50,10 +49,6 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
   const [cameraOpen, setCameraOpen] = useState(false);
   const [liveStatus, setLiveStatus] = useState<string | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [ocrText, setOcrText] = useState("");
-  const [ocrExpanded, setOcrExpanded] = useState(false);
-  const [abbr, setAbbr] = useState("");
-  const [number, setNumber] = useState("");
   const [phase, setPhase] = useState<"idle" | "looking" | "done">("idle");
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<LookupResult | null>(null);
@@ -87,14 +82,10 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
 
   async function applyResult(data: LookupResult) {
     setResult(data);
-    setAbbr(data.abbreviation);
-    setNumber(data.number);
-    if (data.ocrText) setOcrText(data.ocrText);
     setPhase("done");
     lastFoundRef.current = data.tcgdexId;
   }
 
-  /** OCR no browser + resolve no servidor (funciona na Vercel). */
   async function scanImageBase64(imageBase64: string): Promise<{
     result: LookupResult | null;
     ocrText: string;
@@ -108,7 +99,6 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
       // opcional
     }
     const joined = [fullText, stripText].filter(Boolean).join("\n");
-    setOcrText(joined);
 
     if (!joined.trim()) {
       return { result: null, ocrText: "" };
@@ -138,7 +128,6 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
     return { result: data as LookupResult, ocrText: joined };
   }
 
-  // Câmera: procura até achar UMA carta → para tudo e mostra embaixo
   useEffect(() => {
     if (!cameraOpen) return;
     let cancelled = false;
@@ -169,16 +158,11 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
       setLiveStatus("Procurando carta…");
 
       try {
-        const { result: found, ocrText: readText } =
-          await scanImageBase64(frame);
+        const { result: found } = await scanImageBase64(frame);
         if (cancelled || foundLockRef.current) return;
 
         if (!found) {
-          setLiveStatus(
-            readText
-              ? "Ainda procurando… (texto parcial abaixo)"
-              : "Aproxime a carta e segure firme…",
-          );
+          setLiveStatus("Ainda procurando… aproxime a carta e segure firme.");
           return;
         }
 
@@ -214,8 +198,6 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
   async function openCamera() {
     setError(null);
     setResult(null);
-    setOcrText("");
-    setOcrExpanded(false);
     lastFoundRef.current = null;
     foundLockRef.current = false;
 
@@ -250,8 +232,6 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
     stopCamera();
     setError(null);
     setResult(null);
-    setOcrText("");
-    setOcrExpanded(false);
     setPhase("looking");
     if (previewUrl) URL.revokeObjectURL(previewUrl);
     setPreviewUrl(URL.createObjectURL(file));
@@ -264,14 +244,11 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
         reader.readAsDataURL(file);
       });
 
-      const { result: found, ocrText: readText } =
-        await scanImageBase64(dataUrl);
+      const { result: found } = await scanImageBase64(dataUrl);
       if (!found) {
         setPhase("idle");
         setError(
-          readText
-            ? "Texto lido abaixo. Ainda não identifiquei a carta — tente busca manual."
-            : "Não consegui ler nenhuma palavra. Tente outra foto, mais nítida.",
+          "Não identifiquei a carta. Tente outra foto, mais nítida e bem iluminada.",
         );
         return;
       }
@@ -291,29 +268,6 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
     if (file) void processFile(file);
   }
 
-  async function manualLookup() {
-    setPhase("looking");
-    setError(null);
-    try {
-      const params = new URLSearchParams({
-        abbr: abbr.trim().toUpperCase(),
-        number: number.trim(),
-      });
-      const response = await fetch(`/api/lookup-card?${params.toString()}`);
-      const data = (await response.json()) as LookupResult & { error?: string };
-      if (!response.ok) throw new Error(data.error ?? "Não encontrada.");
-      await applyResult(data);
-    } catch (err) {
-      setPhase("idle");
-      setError(err instanceof Error ? err.message : "Falha na busca.");
-    }
-  }
-
-  const ocrPreview =
-    ocrText.length > 280 && !ocrExpanded
-      ? `${ocrText.slice(0, 280).trim()}…`
-      : ocrText;
-
   return (
     <div className="space-y-6">
       <div className="rounded-2xl border border-border bg-card/80 p-4 sm:p-6">
@@ -324,8 +278,7 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
           <div className="space-y-1">
             <h2 className="font-heading text-lg font-semibold">Escanear carta</h2>
             <p className="text-sm text-muted-foreground">
-              OCR roda no seu aparelho (funciona em produção). Ao achar a carta,{" "}
-              <span className="text-foreground">para na hora</span> e mostra
+              Use a câmera ou envie uma foto. Ao achar a carta, para e mostra
               embaixo.
             </p>
           </div>
@@ -413,96 +366,6 @@ export function CardScanner({ getStatus, onStatusChange }: CardScannerProps) {
             />
           </div>
         ) : null}
-
-        <div className="mt-4 space-y-2">
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-sm font-medium">Texto lido na carta</span>
-            {ocrText.length > 280 ? (
-              <button
-                type="button"
-                className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-                onClick={() => setOcrExpanded((v) => !v)}
-              >
-                {ocrExpanded ? (
-                  <>
-                    <ChevronUp className="size-3.5" />
-                    Recolher
-                  </>
-                ) : (
-                  <>
-                    <ChevronDown className="size-3.5" />
-                    Ver texto completo
-                  </>
-                )}
-              </button>
-            ) : null}
-          </div>
-          <div
-            role="button"
-            tabIndex={0}
-            onClick={() => {
-              if (ocrText.length > 280) setOcrExpanded((v) => !v);
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                if (ocrText.length > 280) setOcrExpanded((v) => !v);
-              }
-            }}
-            className={`rounded-xl border border-border bg-muted/40 p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap text-foreground ${
-              ocrExpanded ? "max-h-96 overflow-auto" : "max-h-36 overflow-hidden"
-            } ${ocrText ? "cursor-pointer" : ""}`}
-          >
-            {ocrText ? (
-              ocrPreview
-            ) : phase === "looking" ? (
-              <span className="text-muted-foreground">
-                Lendo palavras da carta… aguarde alguns segundos.
-              </span>
-            ) : (
-              <span className="text-muted-foreground">
-                Ainda sem leitura. Envie uma foto ou use a câmera — o texto aparece
-                aqui.
-              </span>
-            )}
-          </div>
-          {result?.strategy ? (
-            <p className="text-[11px] text-muted-foreground">
-              Estratégia: {result.strategy}
-            </p>
-          ) : null}
-        </div>
-
-        <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_1fr_auto]">
-          <label className="space-y-1 text-sm">
-            <span className="text-muted-foreground">Abreviação</span>
-            <input
-              value={abbr}
-              onChange={(e) => setAbbr(e.target.value.toUpperCase())}
-              placeholder="CRI"
-              className="flex h-9 w-full rounded-lg border border-input bg-background px-3 font-mono text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-            />
-          </label>
-          <label className="space-y-1 text-sm">
-            <span className="text-muted-foreground">Número</span>
-            <input
-              value={number}
-              onChange={(e) => setNumber(e.target.value)}
-              placeholder="112"
-              className="flex h-9 w-full rounded-lg border border-input bg-background px-3 font-mono text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-            />
-          </label>
-          <div className="flex items-end">
-            <Button
-              type="button"
-              className="w-full sm:w-auto"
-              disabled={!abbr.trim() || !number.trim() || phase === "looking"}
-              onClick={() => void manualLookup()}
-            >
-              Buscar
-            </Button>
-          </div>
-        </div>
       </div>
 
       {result ? (
