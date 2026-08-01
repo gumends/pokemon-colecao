@@ -66,6 +66,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         signal: AbortSignal.timeout(8000),
       });
       if (response.status === 401) {
+        setAuthToken(null);
         setUser(null);
         return;
       }
